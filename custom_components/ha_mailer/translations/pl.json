@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA_mailer",
+        "data": {
+          "entities": "Encje (kolejność = kolejność wierszy w Excelu)",
+          "cron": "Harmonogram (cron)",
+          "gmail_user": "Konto Gmail (nadawca)",
+          "gmail_app_password": "Hasło aplikacji Gmail",
+          "recipient": "Adres odbiorcy",
+          "subject": "Stały tytuł maila"
+        },
+        "data_description": {
+          "entities": "Encje trafiają do pliku w tej kolejności i zawsze w tych samych wierszach. Nowe dopisywane są na końcu.",
+          "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
+          "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
+          "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
+          "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki."
+        }
+      }
+    },
+    "error": {
+      "no_entities": "Wybierz co najmniej jedną encję.",
+      "invalid_cron": "Nieprawidłowe wyrażenie cron.",
+      "invalid_email": "Nieprawidłowy adres e-mail.",
+      "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
+      "no_subject": "Tytuł nie może być pusty.",
+      "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
+      "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HA_mailer",
+        "data": {
+          "entities": "Encje (kolejność = kolejność wierszy w Excelu)",
+          "cron": "Harmonogram (cron)",
+          "gmail_user": "Konto Gmail (nadawca)",
+          "gmail_app_password": "Hasło aplikacji Gmail (puste = bez zmian)",
+          "recipient": "Adres odbiorcy",
+          "subject": "Stały tytuł maila"
+        },
+        "data_description": {
+          "entities": "Encje trafiają do pliku w tej kolejności i zawsze w tych samych wierszach. Nowe dopisywane są na końcu.",
+          "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
+          "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
+          "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
+          "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki."
+        }
+      }
+    },
+    "error": {
+      "no_entities": "Wybierz co najmniej jedną encję.",
+      "invalid_cron": "Nieprawidłowe wyrażenie cron.",
+      "invalid_email": "Nieprawidłowy adres e-mail.",
+      "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
+      "no_subject": "Tytuł nie może być pusty.",
+      "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
+      "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+    }
+  },
+  "services": {
+    "send_now": {
+      "name": "Wyślij raport teraz",
+      "description": "Natychmiast tworzy migawkę encji i wysyła mail z plikiem Excel (poza harmonogramem). Przy błędzie akcja kończy się komunikatem.",
+      "fields": {
+        "entry_id": {
+          "name": "Konfiguracja",
+          "description": "Którą konfigurację HA_mailer uruchomić. Puste pole = wszystkie."
+        }
+      }
+    }
+  }
+}
