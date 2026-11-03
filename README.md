@@ -4,110 +4,148 @@ Integracja HACS dla Home Assistanta. W wybranym terminie (wyrażenie **cron**) r
 
 ## Funkcje
 
-- dowolna liczba encji w jednym raporcie,
-- dowolny harmonogram wysyłki (wyrażenie cron),
-- plik Excel o stałym układzie: każda encja zawsze w tym samym wierszu,
+- dowolna liczba encji w jednym raporcie i dowolny harmonogram (cron),
+- **konfigurowalny układ pliku**: wybierasz, które kolumny się w nim znajdą (opis, encja, nazwa, wartość, jednostka, ostatnia zmiana, lp.) i w jakiej kolejności,
+- **wiersze z samym opisem** (bez encji), np. nagłówki sekcji i separatory,
+- stała pozycja: każdy wiersz zawsze w tym samym miejscu pliku,
+- edycja wierszy **graficznie** (menu w interfejsie) lub **tekstowo** (YAML w interfejsie),
+- konfiguracja także przez **configuration.yaml** (import do wpisu w UI),
 - tytuł maila: stała wartość + data i godzina wysyłki,
 - jawne błędy wysyłki: log, powiadomienie w HA, status w encji,
-- trzy encje: status wysyłki, ostatnia wysyłka, statystyki (zapisywane na dysku, przetrwają restart),
-- akcja `ha_mailer.send_now` do natychmiastowej wysyłki (np. na test),
-- konfiguracja w całości z poziomu interfejsu HA.
+- trzy encje: status wysyłki, ostatnia wysyłka, statystyki (przetrwają restart),
+- akcja `ha_mailer.send_now` do natychmiastowej wysyłki.
 
 ## Wymagania
 
 - Home Assistant 2024.8 lub nowszy,
 - konto Gmail z włączoną weryfikacją dwuetapową i **hasłem aplikacji**,
-- dostęp HA do internetu (serwer `smtp.gmail.com`, port 465).
+- dostęp HA do internetu (`smtp.gmail.com`, port 465).
 
-Biblioteki `openpyxl` i `croniter` Home Assistant instaluje sam przy pierwszym uruchomieniu integracji.
+Biblioteki `openpyxl` i `croniter` Home Assistant instaluje sam.
 
 ## Instalacja
 
 ### Przez HACS
 
-1. W HACS wybierz menu **⋮ → Własne repozytoria** (Custom repositories).
-2. Wklej adres tego repozytorium, jako kategorię wybierz **Integracja** (Integration).
-3. Znajdź na liście **HA_mailer**, zainstaluj i **zrestartuj Home Assistanta**.
-4. Wejdź w **Ustawienia → Urządzenia i usługi → Dodaj integrację** i wyszukaj **HA_mailer**.
+1. W HACS wybierz **⋮ → Własne repozytoria** (Custom repositories).
+2. Wklej adres tego repozytorium, kategoria **Integracja**.
+3. Zainstaluj **HA_mailer** i **zrestartuj Home Assistanta**.
+4. **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA_mailer** (albo skonfiguruj przez YAML, patrz niżej).
 
 ### Ręcznie
 
-Skopiuj folder `custom_components/ha_mailer` do katalogu `/config/custom_components/`, zrestartuj Home Assistanta i dodaj integrację jak w punkcie 4 powyżej.
+Skopiuj folder `custom_components/ha_mailer` do `/config/custom_components/` i zrestartuj HA.
 
 ## Hasło aplikacji Gmail
 
-Zwykłe hasło do Gmaila **nie zadziała**.
+Zwykłe hasło **nie zadziała**. Włącz weryfikację dwuetapową, a potem utwórz hasło aplikacji: https://myaccount.google.com/apppasswords. Spacje w haśle są ignorowane.
 
-1. Włącz weryfikację dwuetapową na koncie Google.
-2. Otwórz https://myaccount.google.com/apppasswords i utwórz hasło aplikacji (np. o nazwie „HA_mailer”).
-3. Wklej 16-znakowe hasło do konfiguracji. Spacje możesz zostawić, zostaną usunięte automatycznie.
+## Konfiguracja w interfejsie
 
-## Konfiguracja
+**Dodawanie integracji.** Podajesz encje, harmonogram, dane Gmaila, odbiorcę, tytuł i kolumny. Przy zapisie sprawdzana jest poprawność danych oraz logowanie do Gmaila. Z wybranych encji powstają wiersze, a szczegóły (opisy, wiersze bez encji) ustawisz po dodaniu integracji.
 
-| Pole | Opis |
+**Zmiany.** Przycisk **Konfiguruj** przy integracji otwiera menu:
+
+| Pozycja | Co robi |
 |---|---|
-| Encje | Encje do raportu. Kolejność wyboru = kolejność wierszy w Excelu. |
-| Harmonogram (cron) | Wyrażenie cron z 5 polami, liczone wg strefy czasowej HA. |
-| Konto Gmail | Adres nadawcy. |
-| Hasło aplikacji Gmail | Hasło aplikacji (patrz wyżej). |
-| Adres odbiorcy | Jeden lub kilka adresów oddzielonych przecinkiem. |
-| Stały tytuł maila | Do tytułu zawsze dodawana jest data i godzina wysyłki. |
+| Ustawienia | Gmail (puste hasło = bez zmian), harmonogram, tytuł, kolumny |
+| Wiersze - edytor graficzny | dodawanie, edycja, usuwanie i przesuwanie wierszy |
+| Kolumny i wiersze - edycja tekstowa | cały układ jako YAML w jednym polu |
 
-Przy zapisie sprawdzana jest poprawność cron, adresów oraz **logowanie do Gmaila**, więc błędne dane wychodzą od razu. Ustawienia zmienisz później przyciskiem **Konfiguruj** przy integracji (puste pole hasła = bez zmian).
+### Edytor graficzny
 
-### Przykłady harmonogramu
+Menu pokazuje aktualną listę wierszy i pozwala: **dodać wiersz z encją** (z opcjonalnym opisem), **dodać wiersz z samym opisem**, **edytować**, **usunąć**, **przesunąć** (na wskazaną pozycję) oraz **zapisać**. Nowy wiersz można wstawić na wybranej pozycji, a bez niej trafia na koniec. Zmiany zapisują się dopiero po wybraniu „Zapisz i zamknij”, zamknięcie okna je odrzuca.
 
-| Wyrażenie | Kiedy |
-|---|---|
-| `0 8 * * *` | codziennie o 8:00 |
-| `0 7 * * 1` | w poniedziałki o 7:00 |
-| `0 18 1 * *` | pierwszego dnia miesiąca o 18:00 |
-| `0 6,18 * * 1-5` | od poniedziałku do piątku o 6:00 i 18:00 |
-| `*/30 * * * *` | co 30 minut |
+Jeśli dodasz wiersz z samym opisem, a układ nie ma kolumny „Opis”, zostanie ona dodana automatycznie.
 
-Format: `minuta godzina dzień-miesiąca miesiąc dzień-tygodnia`.
+### Edycja tekstowa
 
-## Mail i plik Excel
+```yaml
+columns:
+  - lp
+  - opis
+  - encja
+  - nazwa
+  - wartosc
+  - jednostka
+  - zmiana
+rows:
+  - description: Salon            # wiersz z samym opisem
+  - entity: sensor.salon_temperatura
+    description: Temperatura
+  - entity: sensor.salon_wilgotnosc
+  - description: Kuchnia
+  - entity: sensor.kuchnia_temperatura
+```
 
-Przykładowy tytuł: `HA_mailer - raport 2026-11-03 08:00:00`.
-Załącznik: `HA_mailer_2026-11-03_08-00-00.xlsx`.
+Przy zapisie układ jest walidowany, a błąd pokazuje konkretny powód.
 
-Arkusz **Migawka** ma stały układ:
+## Układ pliku Excel
 
-| Wiersz | Zawartość |
+**Kolumny** (klucz → nagłówek): `lp` → Lp., `opis` → Opis, `encja` → Encja, `nazwa` → Nazwa, `wartosc` → Wartość, `jednostka` → Jednostka, `zmiana` → Ostatnia zmiana.
+
+- Kolumny występują w pliku dokładnie w podanej kolejności. Kolumny, której nie wybrano, w pliku nie ma, więc encję lub nazwę można pominąć.
+- Kolumny nie mogą się powtarzać.
+- „Lp.” numeruje tylko wiersze z encjami.
+
+**Wiersze** (arkusz „Migawka”):
+
+| Wiersz arkusza | Zawartość |
 |---|---|
 | 1 | „Czas migawki:” i data wysyłki |
-| 3 | nagłówki: Lp., Encja, Nazwa, Wartość, Jednostka, Ostatnia zmiana |
-| 4 i dalej | po jednej encji na wiersz, w kolejności z konfiguracji |
+| 3 | nagłówki wybranych kolumn |
+| 4 i dalej | wiersze z konfiguracji, po kolei |
 
-- Wartości liczbowe są zapisywane jako liczby, więc można na nich liczyć w Excelu.
-- Jeśli encja nie istnieje, jej wiersz zostaje, a w kolumnie „Wartość” jest `brak encji`.
-- W opcjach istniejące encje zostają na swoich miejscach, a nowe są dopisywane na końcu. Usunięcie encji z konfiguracji przesuwa kolejne wiersze w górę.
+- **Wiersz z encją** ma wartości z jej stanu w momencie wysyłki. Kolumna „Opis” zawiera Twój opis (może być pusty). Liczby zapisywane są jako liczby, teksty zawsze jako tekst. Brakująca encja zostaje na swoim miejscu z napisem `brak encji`.
+- **Wiersz z samym opisem** ma tylko tekst w kolumnie „Opis”, pogrubiony na jasnoniebieskim tle (nagłówek lub separator).
+- Pozycja wiersza w pliku odpowiada jego pozycji na liście. Usunięcie wiersza przesuwa kolejne w górę.
+
+## Konfiguracja przez configuration.yaml
+
+```yaml
+ha_mailer:
+  id: glowny                       # opcjonalne, wymagane przy kilku blokach
+  cron: "0 8 * * *"
+  gmail_user: moj.adres@gmail.com
+  gmail_app_password: !secret gmail_app_password
+  recipient: odbiorca@example.com  # lub kilka po przecinku
+  subject: "HA_mailer - raport"    # opcjonalne
+  columns: [lp, opis, encja, nazwa, wartosc, jednostka, zmiana]   # opcjonalne
+  rows:
+    - description: Salon
+    - entity: sensor.salon_temperatura
+      description: Temperatura
+    - entity: sensor.salon_wilgotnosc
+    - description: Kuchnia
+    - entity: sensor.kuchnia_temperatura
+```
+
+Można podać listę kilku bloków (każdy z własnym `id`). Po restarcie HA dla każdego bloku powstaje wpis widoczny w interfejsie (**HA_mailer (YAML)**).
+
+**Jak działa synchronizacja YAML ↔ interfejs:**
+
+- YAML jest importowany przy starcie Home Assistanta, a wpis można potem edytować w interfejsie.
+- Zmiany z interfejsu **zostają**, dopóki nie zmienisz treści bloku w YAML.
+- Gdy zmienisz blok w YAML i zrestartujesz HA, wpis jest **w całości nadpisywany** zawartością YAML, także zmiany zrobione wcześniej w interfejsie.
+- Usunięcie bloku z YAML nie usuwa wpisu. Usuń go ręcznie w interfejsie.
+- Przy importie nie sprawdza się logowania do Gmaila (HA może startować bez internetu). Błąd pojawi się przy pierwszej wysyłce.
+- Błędy w YAML (zły cron, nieistniejąca kolumna, wiersz bez encji i bez opisu) zgłasza Home Assistant przy sprawdzaniu konfiguracji.
 
 ## Encje
 
-Integracja tworzy urządzenie **HA_mailer** z trzema sensorami (identyfikatory przykładowe, mogą się różnić):
+Urządzenie **HA_mailer** ma trzy sensory (identyfikatory przykładowe):
 
 | Encja | Stan | Atrybuty |
 |---|---|---|
 | `sensor.ha_mailer_status_wysylki` | `OK` / `Błąd` / `Brak danych` | `blad`, `ostatnia_proba`, `odbiorca` |
 | `sensor.ha_mailer_ostatnia_wysylka` | czas ostatniej **udanej** wysyłki | `ostatnia_proba` |
-| `sensor.ha_mailer_statystyki` | liczba udanych wysyłek | `udane`, `nieudane`, `razem`, `skutecznosc_proc`, `ostatni_blad`, `czas_ostatniego_bledu`, `rozmiar_ostatniego_pliku_kb`, `nastepna_wysylka`, `liczba_encji` |
+| `sensor.ha_mailer_statystyki` | liczba udanych wysyłek | `udane`, `nieudane`, `razem`, `skutecznosc_proc`, `ostatni_blad`, `czas_ostatniego_bledu`, `rozmiar_ostatniego_pliku_kb`, `nastepna_wysylka`, `liczba_encji`, `liczba_wierszy` |
 
-Statystyki są zapisywane w `/config/.storage/ha_mailer.<entry_id>` i usuwane razem z integracją.
+Statystyki są zapisywane w `/config/.storage/ha_mailer.<entry_id>`.
 
 ## Obsługa błędów
 
-Gdy wysyłka się nie uda (np. złe hasło, brak internetu, odrzucony adres), HA_mailer:
-
-1. zapisuje błąd w logu (`Ustawienia → System → Logi`, filtr `ha_mailer`),
-2. tworzy powiadomienie w panelu HA, które znika po następnej udanej wysyłce,
-3. ustawia status `Błąd` z opisem w atrybucie `blad`,
-4. zwiększa licznik `nieudane` w statystykach.
-
-Akcja `ha_mailer.send_now` w razie błędu również kończy się komunikatem.
-
-### Przykład: powiadomienie na telefon o błędzie
+Gdy wysyłka się nie uda, HA_mailer zapisuje błąd w logu (filtr `ha_mailer`), tworzy powiadomienie w panelu HA (znika po udanej wysyłce), ustawia status `Błąd` z opisem w atrybucie `blad` i zwiększa licznik `nieudane`. Akcja `ha_mailer.send_now` też kończy się komunikatem.
 
 ```yaml
 automation:
@@ -125,29 +163,42 @@ automation:
 
 ## Akcja `ha_mailer.send_now`
 
-Natychmiast tworzy raport i wysyła go, niezależnie od harmonogramu. Pole **Konfiguracja** pozwala wskazać wpis HA_mailer (puste = wszystkie). Test wykonasz w **Narzędzia deweloperskie → Akcje**.
+Natychmiast tworzy raport i wysyła go, niezależnie od harmonogramu. Pole **Konfiguracja** wskazuje wpis (puste = wszystkie). Test: **Narzędzia deweloperskie → Akcje**.
 
-```yaml
-action: ha_mailer.send_now
-```
+## Przykłady harmonogramu
+
+| Wyrażenie | Kiedy |
+|---|---|
+| `0 8 * * *` | codziennie o 8:00 |
+| `0 7 * * 1` | w poniedziałki o 7:00 |
+| `0 18 1 * *` | pierwszego dnia miesiąca o 18:00 |
+| `0 6,18 * * 1-5` | pn-pt o 6:00 i 18:00 |
+| `*/30 * * * *` | co 30 minut |
+
+Format: `minuta godzina dzień-miesiąca miesiąc dzień-tygodnia`, strefa czasowa jak w HA.
+
+## Aktualizacja z wersji 1.1
+
+Istniejące wpisy są migrowane automatycznie: lista encji staje się listą wierszy, a układ pliku pozostaje taki jak dotąd (bez kolumny „Opis”).
 
 ## Rozwiązywanie problemów
 
 | Objaw | Przyczyna / rozwiązanie |
 |---|---|
-| „Logowanie do Gmaila nie powiodło się" | Użyto zwykłego hasła zamiast hasła aplikacji albo brak weryfikacji dwuetapowej. |
-| „Nie można połączyć się z smtp.gmail.com" | Brak internetu lub zablokowany port 465 w sieci/firewallu. |
-| Mail nie przychodzi, status `OK` | Sprawdź folder spam oraz adres odbiorcy. |
-| Brak integracji na liście po instalacji | Zrestartuj Home Assistanta. |
-| Wysyłka nie nastąpiła o planowanej porze | Sprawdź atrybut `nastepna_wysylka` w statystykach i strefę czasową HA (*Ustawienia → System → Ogólne*). |
+| „Logowanie do Gmaila nie powiodło się” | Użyto zwykłego hasła zamiast hasła aplikacji albo brak weryfikacji dwuetapowej. |
+| „Nie można połączyć się z smtp.gmail.com” | Brak internetu lub zablokowany port 465. |
+| „Masz wiersze bez encji - dodaj kolumnę Opis” | Wiersze z samym opisem wymagają kolumny „Opis” w układzie. |
+| Mail nie przychodzi, status `OK` | Sprawdź spam i adres odbiorcy. |
+| Zmiany z interfejsu zniknęły po restarcie | Zmieniono blok `ha_mailer` w YAML, co nadpisuje wpis. |
+| Brak integracji po instalacji | Zrestartuj Home Assistanta. |
 
-## Ograniczenia i uwagi
+## Ograniczenia
 
-- Wysyłki, które wypadły w czasie wyłączenia HA, nie są nadrabiane. Po starcie liczony jest kolejny termin z harmonogramu.
-- Hasło aplikacji jest przechowywane w konfiguracji Home Assistanta (`/config/.storage`), tak jak dane logowania innych integracji.
-- Obowiązują limity Gmaila (m.in. rozmiar załącznika do 25 MB i dzienny limit wysyłek).
+- Wysyłki, które wypadły w czasie wyłączenia HA, nie są nadrabiane.
+- Hasło aplikacji jest przechowywane w konfiguracji HA (`/config/.storage`).
+- Obowiązują limity Gmaila (załącznik do 25 MB, dzienny limit wysyłek).
 - Stan encji jest odczytywany w momencie wysyłki, dane nie są logowane w czasie.
-- Interfejs konfiguracji jest dostępny w języku polskim.
+- Interfejs konfiguracji jest po polsku.
 
 ## Struktura repozytorium
 
@@ -155,8 +206,8 @@ action: ha_mailer.send_now
 hacs.json
 README.md
 custom_components/ha_mailer/
-├── __init__.py        # logika, harmonogram, Excel, wysyłka, statystyki
-├── config_flow.py     # konfiguracja i opcje w interfejsie
+├── __init__.py        # logika, harmonogram, Excel, wysyłka, statystyki, import YAML
+├── config_flow.py     # konfiguracja, opcje, edytor graficzny i tekstowy
 ├── sensor.py          # encje: status, ostatnia wysyłka, statystyki
 ├── services.yaml      # opis akcji send_now
 ├── manifest.json
