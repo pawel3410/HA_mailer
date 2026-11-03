@@ -5,3 +5,18 @@ send_now:
       selector:
         config_entry:
           integration: ha_mailer
+    report:
+      required: false
+      selector:
+        text:
+clear_pending:
+  fields:
+    entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: ha_mailer
+    report:
+      required: false
+      selector:
+        text:
