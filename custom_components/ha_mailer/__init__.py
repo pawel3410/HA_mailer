@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import smtplib
 import ssl
 from datetime import datetime
@@ -16,9 +17,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from homeassistant.components import persistent_notification
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
@@ -29,12 +31,32 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "ha_mailer"
 PLATFORMS = ["sensor"]
 
-CONF_ENTITIES = "entities"
+CONF_ID = "id"
+CONF_ENTITIES = "entities"  # tylko w kroku początkowym UI (potem zamieniane na wiersze)
 CONF_CRON = "cron"
 CONF_GMAIL_USER = "gmail_user"
 CONF_GMAIL_PASSWORD = "gmail_app_password"
 CONF_RECIPIENT = "recipient"
 CONF_SUBJECT = "subject"
+CONF_COLUMNS = "columns"
+CONF_ROWS = "rows"
+CONF_YAML_HASH = "yaml_hash"
+
+ROW_ENTITY = "entity"
+ROW_DESC = "description"
+
+# klucz kolumny -> nagłówek w Excelu (kolejność = domyślna kolejność)
+COLUMN_LABELS = {
+    "lp": "Lp.",
+    "opis": "Opis",
+    "encja": "Encja",
+    "nazwa": "Nazwa",
+    "wartosc": "Wartość",
+    "jednostka": "Jednostka",
+    "zmiana": "Ostatnia zmiana",
+}
+DEFAULT_COLUMNS = ["lp", "opis", "encja", "nazwa", "wartosc", "jednostka", "zmiana"]
+LEGACY_COLUMNS = ["lp", "encja", "nazwa", "wartosc", "jednostka", "zmiana"]  # układ z wersji 1.1
 
 DEFAULT_CRON = "0 8 * * *"
 DEFAULT_SUBJECT = "HA_mailer - raport"
@@ -44,8 +66,10 @@ GMAIL_PORT = 465
 SIGNAL = DOMAIN + "_update_{}"
 DT_FMT = "%Y-%m-%d %H:%M:%S"
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-HEADERS = ["Lp.", "Encja", "Nazwa", "Wartość", "Jednostka", "Ostatnia zmiana"]
 FIRST_DATA_ROW = 4  # wiersz 1: czas migawki, wiersz 3: nagłówki, dane od wiersza 4
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+ERR_OPIS = "Wiersze bez encji wymagają kolumny 'opis' w układzie."
 
 DEFAULT_STATS = {
     "ok": 0,
@@ -59,6 +83,104 @@ DEFAULT_STATS = {
 }
 
 
+# ---------------------------------------------------------------- walidacja ---
+def split_recipients(text: str) -> list[str]:
+    return [r.strip() for r in str(text).replace(";", ",").split(",") if r.strip()]
+
+
+def _cron(value):
+    value = " ".join(str(value).split())
+    if not croniter.is_valid(value):
+        raise vol.Invalid("Nieprawidłowe wyrażenie cron.")
+    return value
+
+
+def _email(value):
+    value = str(value).strip()
+    if not EMAIL_RE.match(value):
+        raise vol.Invalid("Nieprawidłowy adres e-mail.")
+    return value
+
+
+def _recipients(value):
+    value = str(value).strip()
+    items = split_recipients(value)
+    if not items or not all(EMAIL_RE.match(i) for i in items):
+        raise vol.Invalid("Nieprawidłowy adres odbiorcy.")
+    return value
+
+
+def _normalize_row(row: dict) -> dict:
+    out: dict = {}
+    if row.get(ROW_ENTITY):
+        out[ROW_ENTITY] = row[ROW_ENTITY]
+    desc = str(row.get(ROW_DESC) or "").strip()
+    if desc:
+        out[ROW_DESC] = desc
+    if not out:
+        raise vol.Invalid("Wiersz musi mieć encję lub opis.")
+    return out
+
+
+def _unique(values):
+    if len(set(values)) != len(values):
+        raise vol.Invalid("Kolumny nie mogą się powtarzać.")
+    return values
+
+
+def _check_layout(conf: dict) -> dict:
+    if any(not r.get(ROW_ENTITY) for r in conf[CONF_ROWS]) and "opis" not in conf[CONF_COLUMNS]:
+        raise vol.Invalid(ERR_OPIS)
+    return conf
+
+
+ROW_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional(ROW_ENTITY): vol.Any(None, "", cv.entity_id),
+            vol.Optional(ROW_DESC): vol.Any(None, cv.string),
+        }
+    ),
+    _normalize_row,
+)
+COLUMNS_SCHEMA = vol.All(cv.ensure_list, [vol.In(list(COLUMN_LABELS))], vol.Length(min=1), _unique)
+ROWS_SCHEMA = vol.All(cv.ensure_list, [ROW_SCHEMA], vol.Length(min=1))
+LAYOUT_SCHEMA = vol.All(
+    vol.Schema(
+        {vol.Required(CONF_COLUMNS): COLUMNS_SCHEMA, vol.Required(CONF_ROWS): ROWS_SCHEMA}
+    ),
+    _check_layout,
+)
+YAML_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional(CONF_ID): cv.string,
+            vol.Required(CONF_CRON): _cron,
+            vol.Required(CONF_GMAIL_USER): _email,
+            vol.Required(CONF_GMAIL_PASSWORD): cv.string,
+            vol.Required(CONF_RECIPIENT): _recipients,
+            vol.Optional(CONF_SUBJECT, default=DEFAULT_SUBJECT): cv.string,
+            vol.Optional(CONF_COLUMNS, default=DEFAULT_COLUMNS): COLUMNS_SCHEMA,
+            vol.Required(CONF_ROWS): ROWS_SCHEMA,
+        }
+    ),
+    _check_layout,
+)
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: vol.All(cv.ensure_list, [YAML_SCHEMA])}, extra=vol.ALLOW_EXTRA
+)
+
+
+def layout_error(columns, rows) -> str | None:
+    """Zwraca opis błędu układu lub None, gdy układ jest poprawny."""
+    try:
+        LAYOUT_SCHEMA({CONF_COLUMNS: columns, CONF_ROWS: rows})
+    except vol.Invalid as err:
+        return str(err)
+    return None
+
+
+# ------------------------------------------------------------------- Excel ---
 def _to_value(raw: str):
     try:
         number = float(raw)
@@ -67,8 +189,8 @@ def _to_value(raw: str):
     return number if math.isfinite(number) else raw
 
 
-def _build_xlsx(rows: list[list], snapshot: datetime) -> bytes:
-    """Układ stały: wiersz N pliku = N-ta encja z konfiguracji."""
+def _build_xlsx(columns: list[str], rows: list[tuple[bool, dict]], snapshot: datetime) -> bytes:
+    """Układ stały: wiersz N pliku = N-ty wiersz z konfiguracji, kolumny wg `columns`."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Migawka"
@@ -77,19 +199,30 @@ def _build_xlsx(rows: list[list], snapshot: datetime) -> bytes:
     ws["B1"] = snapshot
     ws["B1"].number_format = "yyyy-mm-dd hh:mm:ss"
     ws["B1"].alignment = Alignment(horizontal="left")
-    for col, header in enumerate(HEADERS, start=1):
-        cell = ws.cell(row=3, column=col, value=header)
+    widths = []
+    for col, key in enumerate(columns, start=1):
+        cell = ws.cell(row=3, column=col, value=COLUMN_LABELS[key])
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
         cell.alignment = Alignment(horizontal="center")
-    for i, row in enumerate(rows):
-        for col, value in enumerate(row, start=1):
-            cell = ws.cell(row=FIRST_DATA_ROW + i, column=col, value=value)
-            if col == 6 and value is not None:
+        widths.append(len(COLUMN_LABELS[key]))
+    text_fill = PatternFill("solid", fgColor="D9E1F2")
+    for i, (is_text, values) in enumerate(rows):
+        r = FIRST_DATA_ROW + i
+        for col, key in enumerate(columns, start=1):
+            value = values.get(key)
+            cell = ws.cell(row=r, column=col, value=value)
+            if isinstance(value, str):
+                cell.data_type = "s"  # tekst z encji nigdy nie jest traktowany jak formuła
+            if key == "zmiana" and value is not None:
                 cell.number_format = "yyyy-mm-dd hh:mm:ss"
-    for col, header in enumerate(HEADERS, start=1):
-        longest = max([len(header)] + [len(str(r[col - 1])) for r in rows if r[col - 1] is not None])
-        ws.column_dimensions[get_column_letter(col)].width = min(longest + 3, 60)
+            if is_text:
+                cell.fill = text_fill
+                cell.font = Font(bold=True)
+            elif value is not None:
+                widths[col - 1] = max(widths[col - 1], len(str(value)))
+    for col, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = min(width + 3, 60)
     ws.freeze_panes = "A4"
     buf = BytesIO()
     wb.save(buf)
@@ -97,10 +230,9 @@ def _build_xlsx(rows: list[list], snapshot: datetime) -> bytes:
 
 
 def _send_mail(cfg: dict, filename: str, subject: str, payload: bytes, body: str) -> None:
-    recipients = [r.strip() for r in cfg[CONF_RECIPIENT].replace(";", ",").split(",") if r.strip()]
     msg = EmailMessage()
     msg["From"] = cfg[CONF_GMAIL_USER]
-    msg["To"] = ", ".join(recipients)
+    msg["To"] = ", ".join(split_recipients(cfg[CONF_RECIPIENT]))
     msg["Subject"] = subject
     msg.set_content(body)
     msg.add_attachment(payload, maintype=XLSX_MIME[0], subtype=XLSX_MIME[1], filename=filename)
@@ -110,6 +242,7 @@ def _send_mail(cfg: dict, filename: str, subject: str, payload: bytes, body: str
         smtp.send_message(msg)
 
 
+# ------------------------------------------------------------------ logika ---
 class HAMailer:
     """Logika jednego wpisu konfiguracji + statystyki (zapisywane na dysku)."""
 
@@ -155,26 +288,33 @@ class HAMailer:
         finally:
             self.schedule()
 
-    def _collect_rows(self) -> list[list]:
-        """Kolejność wierszy = kolejność encji w konfiguracji (nigdy się nie zmienia)."""
-        rows: list[list] = []
-        for i, entity_id in enumerate(self.cfg[CONF_ENTITIES], start=1):
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                rows.append([i, entity_id, entity_id, "brak encji", "", None])
+    def _collect_rows(self) -> list[tuple[bool, dict]]:
+        """Kolejność = kolejność wierszy w konfiguracji (nigdy się nie zmienia).
+
+        Zwraca listę (czy_wiersz_z_samym_opisem, wartości_kolumn).
+        """
+        out: list[tuple[bool, dict]] = []
+        number = 0
+        for row in self.cfg[CONF_ROWS]:
+            desc = row.get(ROW_DESC) or None
+            entity_id = row.get(ROW_ENTITY)
+            if not entity_id:
+                out.append((True, {"opis": desc}))
                 continue
-            changed = dt_util.as_local(state.last_changed).replace(tzinfo=None, microsecond=0)
-            rows.append(
-                [
-                    i,
-                    entity_id,
-                    state.name,
-                    _to_value(state.state),
-                    state.attributes.get("unit_of_measurement", ""),
-                    changed,
-                ]
-            )
-        return rows
+            number += 1
+            state = self.hass.states.get(entity_id)
+            values = {"lp": number, "opis": desc, "encja": entity_id}
+            if state is None:
+                values.update(nazwa=entity_id, wartosc="brak encji", jednostka="")
+            else:
+                values.update(
+                    nazwa=state.name,
+                    wartosc=_to_value(state.state),
+                    jednostka=state.attributes.get("unit_of_measurement", ""),
+                    zmiana=dt_util.as_local(state.last_changed).replace(tzinfo=None, microsecond=0),
+                )
+            out.append((False, values))
+        return out
 
     async def _record(self, now: datetime, error: str | None, size_kb: float | None = None) -> None:
         self.stats["last_attempt"] = now.isoformat()
@@ -211,9 +351,10 @@ class HAMailer:
             stamp = now.strftime(DT_FMT)
             subject = f"{cfg[CONF_SUBJECT]} {stamp}"
             filename = f"HA_mailer_{now.strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-            body = f"Raport HA_mailer z {stamp}. W załączniku wartości {len(rows)} encji."
+            count = sum(1 for is_text, _ in rows if not is_text)
+            body = f"Raport HA_mailer z {stamp}. W załączniku wartości {count} encji."
             payload = await self.hass.async_add_executor_job(
-                _build_xlsx, rows, now.replace(tzinfo=None, microsecond=0)
+                _build_xlsx, list(cfg[CONF_COLUMNS]), rows, now.replace(tzinfo=None, microsecond=0)
             )
             size_kb = round(len(payload) / 1024, 1)
             await self.hass.async_add_executor_job(_send_mail, cfg, filename, subject, payload, body)
@@ -229,6 +370,38 @@ class HAMailer:
         if error:
             raise HomeAssistantError(f"HA_mailer: {error}")
         _LOGGER.info("HA_mailer: wysłano raport do %s", cfg[CONF_RECIPIENT])
+
+
+# ------------------------------------------------------------- cykl życia ---
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Import konfiguracji z configuration.yaml do wpisów w UI."""
+    for idx, conf in enumerate(config.get(DOMAIN, [])):
+        conf = dict(conf)
+        conf.setdefault(CONF_ID, str(idx))
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_IMPORT}, data=conf
+            )
+        )
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """v1 (lista encji) -> v2 (kolumny + wiersze)."""
+    if entry.version == 1:
+
+        def convert(src) -> dict:
+            d = dict(src)
+            if CONF_ENTITIES in d:
+                d[CONF_ROWS] = [{ROW_ENTITY: e} for e in d.pop(CONF_ENTITIES)]
+            return d
+
+        data = convert(entry.data)
+        data.setdefault(CONF_COLUMNS, list(LEGACY_COLUMNS))
+        hass.config_entries.async_update_entry(
+            entry, data=data, options=convert(entry.options), version=2
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
