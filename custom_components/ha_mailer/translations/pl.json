@@ -3,21 +3,24 @@
     "step": {
       "user": {
         "title": "HA_mailer",
+        "description": "{details}",
         "data": {
-          "entities": "Encje (kolejność = kolejność wierszy w Excelu)",
+          "entities": "Encje",
           "cron": "Harmonogram (cron)",
           "gmail_user": "Konto Gmail (nadawca)",
           "gmail_app_password": "Hasło aplikacji Gmail",
           "recipient": "Adres odbiorcy",
-          "subject": "Stały tytuł maila"
+          "subject": "Stały tytuł maila",
+          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
         },
         "data_description": {
-          "entities": "Encje trafiają do pliku w tej kolejności i zawsze w tych samych wierszach. Nowe dopisywane są na końcu.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy, wiersze bez encji i dokładny układ ustawisz później w Konfiguruj.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
           "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
-          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki."
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki.",
+          "columns": "Kolumny pliku Excel. Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej."
         }
       }
     },
@@ -27,29 +30,109 @@
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
       "no_subject": "Tytuł nie może być pusty.",
+      "no_columns": "Wybierz co najmniej jedną kolumnę.",
+      "opis_required": "Masz wiersze bez encji - dodaj kolumnę „Opis”.",
+      "invalid_layout": "Niepoprawny układ: {details}",
+      "invalid_yaml": "Niepoprawny YAML: {details}",
+      "row_empty": "Wiersz musi mieć encję lub opis.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
       "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+    },
+    "abort": {
+      "already_configured": "Konfiguracja YAML jest już zaimportowana.",
+      "yaml_updated": "Konfiguracja YAML została zaktualizowana."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "HA_mailer",
+        "description": "Co chcesz zmienić?",
+        "menu_options": {
+          "settings": "Ustawienia (Gmail, harmonogram, tytuł, kolumny)",
+          "rows_visual": "Wiersze - edytor graficzny",
+          "layout_text": "Kolumny i wiersze - edycja tekstowa (YAML)"
+        }
+      },
+      "settings": {
+        "title": "Ustawienia",
+        "description": "{details}",
         "data": {
-          "entities": "Encje (kolejność = kolejność wierszy w Excelu)",
           "cron": "Harmonogram (cron)",
           "gmail_user": "Konto Gmail (nadawca)",
           "gmail_app_password": "Hasło aplikacji Gmail (puste = bez zmian)",
           "recipient": "Adres odbiorcy",
-          "subject": "Stały tytuł maila"
+          "subject": "Stały tytuł maila",
+          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
         },
         "data_description": {
-          "entities": "Encje trafiają do pliku w tej kolejności i zawsze w tych samych wierszach. Nowe dopisywane są na końcu.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
           "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
-          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki."
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki.",
+          "columns": "Kolumny pliku Excel. Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej."
+        }
+      },
+      "rows_visual": {
+        "title": "Wiersze",
+        "description": "{warning}Aktualne wiersze:\n\n{rows}\n\nWiersze z encją pokazują jej wartość, wiersze z samym opisem służą jako nagłówki lub separatory (wymagają kolumny „Opis”, zostanie dodana automatycznie). Zmiany zapisze dopiero „Zapisz i zamknij”.",
+        "menu_options": {
+          "add_entity": "Dodaj wiersz z encją",
+          "add_text": "Dodaj wiersz z samym opisem",
+          "edit_row": "Edytuj wiersz",
+          "delete_row": "Usuń wiersze",
+          "move_row": "Przesuń wiersz",
+          "rows_save": "Zapisz i zamknij"
+        }
+      },
+      "add_entity": {
+        "title": "Nowy wiersz z encją",
+        "data": {
+          "entity": "Encja",
+          "description": "Opis (opcjonalnie)",
+          "position": "Pozycja (puste = na końcu)"
+        }
+      },
+      "add_text": {
+        "title": "Nowy wiersz z opisem",
+        "data": {
+          "description": "Tekst opisu",
+          "position": "Pozycja (puste = na końcu)"
+        }
+      },
+      "edit_row": {
+        "title": "Edycja wiersza",
+        "data": {
+          "row": "Wiersz"
+        }
+      },
+      "edit_row_form": {
+        "title": "Edycja wiersza",
+        "description": "Puste pole encji zamienia wiersz w wiersz z samym opisem.",
+        "data": {
+          "entity": "Encja",
+          "description": "Opis"
+        }
+      },
+      "delete_row": {
+        "title": "Usuwanie wierszy",
+        "data": {
+          "rows": "Wiersze do usunięcia"
+        }
+      },
+      "move_row": {
+        "title": "Przesuwanie wiersza",
+        "data": {
+          "row": "Wiersz",
+          "position": "Nowa pozycja"
+        }
+      },
+      "layout_text": {
+        "title": "Kolumny i wiersze (YAML)",
+        "description": "Edytuj układ jako YAML. columns - kolumny w kolejności (lp, opis, encja, nazwa, wartosc, jednostka, zmiana). rows - wiersze: entity (opcjonalnie) i description (opcjonalnie). Wiersz bez entity to wiersz z samym opisem i wymaga kolumny opis.",
+        "data": {
+          "layout_yaml": "Układ (YAML)"
         }
       }
     },
@@ -59,6 +142,11 @@
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
       "no_subject": "Tytuł nie może być pusty.",
+      "no_columns": "Wybierz co najmniej jedną kolumnę.",
+      "opis_required": "Masz wiersze bez encji - dodaj kolumnę „Opis”.",
+      "invalid_layout": "Niepoprawny układ: {details}",
+      "invalid_yaml": "Niepoprawny YAML: {details}",
+      "row_empty": "Wiersz musi mieć encję lub opis.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
       "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
     }
