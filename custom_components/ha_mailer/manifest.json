@@ -8,5 +8,5 @@
   "issue_tracker": "https://github.com/TWOJ_LOGIN/ha-mailer/issues",
   "iot_class": "calculated",
   "requirements": ["openpyxl>=3.1.2", "croniter>=2.0.0"],
-  "version": "1.0.0"
+  "version": "1.2.0"
 }
