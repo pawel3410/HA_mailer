@@ -2,30 +2,47 @@
   "config": {
     "step": {
       "user": {
-        "title": "HA_mailer",
-        "description": "{details}",
+        "title": "HA_mailer - ustawienia wspólne",
+        "description": "Konto Gmail, ponawianie i archiwum plików są wspólne dla wszystkich raportów. W następnym kroku dodasz pierwszy raport.",
         "data": {
-          "entities": "Encje",
-          "cron": "Harmonogram (cron)",
           "gmail_user": "Konto Gmail (nadawca)",
           "gmail_app_password": "Hasło aplikacji Gmail",
-          "recipient": "Adres odbiorcy",
-          "subject": "Stały tytuł maila",
-          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
+          "retry_minutes": "Ponawianie nieudanej wysyłki co (minuty)",
+          "retention_days": "Przechowuj pliki (dni, 0 = nie usuwaj)",
+          "storage_path": "Folder na pliki Excel"
         },
         "data_description": {
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy, wiersze bez encji i dokładny układ ustawisz później w Konfiguruj.",
-          "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
-          "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
+          "gmail_user": "Wspólne konto Gmail, z którego wysyłane są wszystkie raporty.",
           "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
+          "retry_minutes": "Gdy wysyłka z harmonogramu się nie uda, ten sam plik jest wysyłany ponownie co tyle minut, aż do skutku.",
+          "retention_days": "Pliki starsze niż podana liczba dni są usuwane (poza czekającymi na ponowienie).",
+          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu /config."
+        }
+      },
+      "first_report": {
+        "title": "HA_mailer - pierwszy raport",
+        "description": "{details}",
+        "data": {
+          "name": "Nazwa raportu",
+          "cron": "Harmonogram (cron)",
+          "recipient": "Adres odbiorcy",
+          "subject": "Stały tytuł maila",
+          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
+          "entities": "Encje"
+        },
+        "data_description": {
+          "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
+          "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
-          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki.",
-          "columns": "Kolumny pliku Excel. Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej."
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
         }
       }
     },
     "error": {
       "no_entities": "Wybierz co najmniej jedną encję.",
+      "no_name": "Podaj nazwę raportu.",
       "invalid_cron": "Nieprawidłowe wyrażenie cron.",
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
@@ -35,6 +52,8 @@
       "invalid_layout": "Niepoprawny układ: {details}",
       "invalid_yaml": "Niepoprawny YAML: {details}",
       "row_empty": "Wiersz musi mieć encję lub opis.",
+      "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
+      "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
       "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
     },
@@ -47,43 +66,104 @@
     "step": {
       "init": {
         "title": "HA_mailer",
-        "description": "Co chcesz zmienić?",
+        "description": "{warning}Raporty:\n\n{reports}\n\nZmiany zapisze dopiero „Zapisz i zamknij”, zamknięcie okna je odrzuca.",
         "menu_options": {
-          "settings": "Ustawienia (Gmail, harmonogram, tytuł, kolumny)",
-          "rows_visual": "Wiersze - edytor graficzny",
-          "layout_text": "Kolumny i wiersze - edycja tekstowa (YAML)"
+          "settings": "Ustawienia wspólne (Gmail, ponawianie, archiwum)",
+          "report_add": "Dodaj raport",
+          "report_edit": "Edytuj raport",
+          "report_delete": "Usuń raporty",
+          "save": "Zapisz i zamknij"
         }
       },
       "settings": {
-        "title": "Ustawienia",
-        "description": "{details}",
+        "title": "Ustawienia wspólne",
         "data": {
-          "cron": "Harmonogram (cron)",
           "gmail_user": "Konto Gmail (nadawca)",
           "gmail_app_password": "Hasło aplikacji Gmail (puste = bez zmian)",
+          "retry_minutes": "Ponawianie nieudanej wysyłki co (minuty)",
+          "retention_days": "Przechowuj pliki (dni, 0 = nie usuwaj)",
+          "storage_path": "Folder na pliki Excel"
+        },
+        "data_description": {
+          "gmail_user": "Wspólne konto Gmail, z którego wysyłane są wszystkie raporty.",
+          "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
+          "retry_minutes": "Gdy wysyłka z harmonogramu się nie uda, ten sam plik jest wysyłany ponownie co tyle minut, aż do skutku.",
+          "retention_days": "Pliki starsze niż podana liczba dni są usuwane (poza czekającymi na ponowienie).",
+          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu /config."
+        }
+      },
+      "report_add": {
+        "title": "Nowy raport",
+        "description": "{details}",
+        "data": {
+          "name": "Nazwa raportu",
+          "cron": "Harmonogram (cron)",
+          "recipient": "Adres odbiorcy",
+          "subject": "Stały tytuł maila",
+          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
+          "entities": "Encje"
+        },
+        "data_description": {
+          "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
+          "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
+          "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
+        }
+      },
+      "report_edit": {
+        "title": "Wybierz raport",
+        "data": {
+          "report": "Raport"
+        }
+      },
+      "report_delete": {
+        "title": "Usuwanie raportów",
+        "description": "Oczekujące ponowienia usuniętych raportów zostaną porzucone.",
+        "data": {
+          "reports": "Raporty do usunięcia"
+        }
+      },
+      "report_menu": {
+        "title": "Raport",
+        "description": "**{name}**\n\n{info}",
+        "menu_options": {
+          "report_settings": "Ustawienia raportu (nazwa, harmonogram, odbiorca, tytuł, kolumny)",
+          "rows_visual": "Wiersze - edytor graficzny",
+          "layout_text": "Kolumny i wiersze - edycja tekstowa (YAML)",
+          "report_back": "Wróć do listy raportów"
+        }
+      },
+      "report_settings": {
+        "title": "Ustawienia raportu",
+        "description": "{details}",
+        "data": {
+          "name": "Nazwa raportu",
+          "cron": "Harmonogram (cron)",
           "recipient": "Adres odbiorcy",
           "subject": "Stały tytuł maila",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
         },
         "data_description": {
+          "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
-          "gmail_user": "Adres Gmail, z którego wysyłany jest mail.",
-          "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
-          "subject": "Do tytułu automatycznie dodawana jest data i godzina wysyłki.",
-          "columns": "Kolumny pliku Excel. Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej."
+          "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
         }
       },
       "rows_visual": {
         "title": "Wiersze",
-        "description": "{warning}Aktualne wiersze:\n\n{rows}\n\nWiersze z encją pokazują jej wartość, wiersze z samym opisem służą jako nagłówki lub separatory (wymagają kolumny „Opis”, zostanie dodana automatycznie). Zmiany zapisze dopiero „Zapisz i zamknij”.",
+        "description": "{warning}Raport: **{name}**\n\nAktualne wiersze:\n\n{rows}\n\nWiersze z encją pokazują jej wartość, wiersze z samym opisem służą jako nagłówki lub separatory (wymagają kolumny „Opis”, zostanie dodana automatycznie). „Zapisz wiersze” przenosi zmiany do raportu, a trwale zapiszesz je dopiero w „Zapisz i zamknij” na liście raportów.",
         "menu_options": {
           "add_entity": "Dodaj wiersz z encją",
           "add_text": "Dodaj wiersz z samym opisem",
           "edit_row": "Edytuj wiersz",
           "delete_row": "Usuń wiersze",
           "move_row": "Przesuń wiersz",
-          "rows_save": "Zapisz i zamknij"
+          "rows_save": "Zapisz wiersze"
         }
       },
       "add_entity": {
@@ -130,7 +210,7 @@
       },
       "layout_text": {
         "title": "Kolumny i wiersze (YAML)",
-        "description": "Edytuj układ jako YAML. columns - kolumny w kolejności (lp, opis, encja, nazwa, wartosc, jednostka, zmiana). rows - wiersze: entity (opcjonalnie) i description (opcjonalnie). Wiersz bez entity to wiersz z samym opisem i wymaga kolumny opis.",
+        "description": "Raport: **{name}**. Edytuj układ jako YAML. columns - kolumny w kolejności (lp, opis, encja, nazwa, wartosc, jednostka, zmiana). rows - wiersze: entity (opcjonalnie) i description (opcjonalnie). Wiersz bez entity to wiersz z samym opisem i wymaga kolumny opis.",
         "data": {
           "layout_yaml": "Układ (YAML)"
         }
@@ -138,6 +218,7 @@
     },
     "error": {
       "no_entities": "Wybierz co najmniej jedną encję.",
+      "no_name": "Podaj nazwę raportu.",
       "invalid_cron": "Nieprawidłowe wyrażenie cron.",
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
@@ -147,6 +228,8 @@
       "invalid_layout": "Niepoprawny układ: {details}",
       "invalid_yaml": "Niepoprawny YAML: {details}",
       "row_empty": "Wiersz musi mieć encję lub opis.",
+      "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
+      "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
       "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
     }
@@ -154,11 +237,29 @@
   "services": {
     "send_now": {
       "name": "Wyślij raport teraz",
-      "description": "Natychmiast tworzy migawkę encji i wysyła mail z plikiem Excel (poza harmonogramem). Przy błędzie akcja kończy się komunikatem.",
+      "description": "Natychmiast tworzy plik, zapisuje go w folderze i wysyła mailem (poza harmonogramem). Przy błędzie akcja kończy się komunikatem, bez ponawiania.",
       "fields": {
         "entry_id": {
           "name": "Konfiguracja",
-          "description": "Którą konfigurację HA_mailer uruchomić. Puste pole = wszystkie."
+          "description": "Którą konfigurację HA_mailer wybrać. Puste pole = wszystkie."
+        },
+        "report": {
+          "name": "Raport",
+          "description": "Nazwa lub ID raportu. Puste pole = wszystkie raporty."
+        }
+      }
+    },
+    "clear_pending": {
+      "name": "Porzuć oczekujące wysyłki",
+      "description": "Przerywa ponawianie nieudanych wysyłek. Pliki zostają w folderze do końca czasu przechowywania.",
+      "fields": {
+        "entry_id": {
+          "name": "Konfiguracja",
+          "description": "Którą konfigurację HA_mailer wybrać. Puste pole = wszystkie."
+        },
+        "report": {
+          "name": "Raport",
+          "description": "Nazwa lub ID raportu. Puste pole = wszystkie raporty."
         }
       }
     }
