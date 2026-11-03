@@ -8,7 +8,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
-from . import CONF_RECIPIENT, DOMAIN, SIGNAL, HAMailer
+from . import CONF_RECIPIENT, CONF_ROWS, DOMAIN, ROW_ENTITY, SIGNAL, HAMailer
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
@@ -92,6 +92,7 @@ class StatsSensor(_Base):
     def extra_state_attributes(self) -> dict:
         s = self._m.stats
         total = s["ok"] + s["fail"]
+        rows = self._m.cfg[CONF_ROWS]
         return {
             "udane": s["ok"],
             "nieudane": s["fail"],
@@ -101,5 +102,6 @@ class StatsSensor(_Base):
             "czas_ostatniego_bledu": s["last_error_time"],
             "rozmiar_ostatniego_pliku_kb": s["last_file_kb"],
             "nastepna_wysylka": self._m.next_run.isoformat() if self._m.next_run else None,
-            "liczba_encji": len(self._m.cfg["entities"]),
+            "liczba_encji": sum(1 for r in rows if r.get(ROW_ENTITY)),
+            "liczba_wierszy": len(rows),
         }
