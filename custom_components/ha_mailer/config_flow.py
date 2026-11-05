@@ -18,6 +18,9 @@ from homeassistant.util import slugify
 
 from . import (
     COLUMN_LABELS,
+    CONF_BCC,
+    CONF_BODY,
+    CONF_CC,
     CONF_COLUMNS,
     CONF_CRON,
     CONF_ENTITIES,
@@ -35,6 +38,7 @@ from . import (
     CONF_YAML_HASH,
     DEFAULT_COLUMNS,
     DEFAULT_CRON,
+    DEFAULT_FOLDER,
     DEFAULT_RETENTION,
     DEFAULT_RETRY,
     DEFAULT_SUBJECT,
@@ -44,12 +48,27 @@ from . import (
     GMAIL_HOST,
     GMAIL_PORT,
     LAYOUT_SCHEMA,
+    ROW_ATTR,
     ROW_DESC,
     ROW_ENTITY,
+    ROW_SHEET,
+    is_text_row,
     layout_error,
     split_recipients,
     yaml_digest,
 )
+
+ERROR_TEXTS = {
+    "no_name": "brak nazwy",
+    "invalid_cron": "nieprawidłowy harmonogram",
+    "invalid_recipient": "nieprawidłowy adres odbiorcy",
+    "invalid_cc": "nieprawidłowy adres DW",
+    "invalid_bcc": "nieprawidłowy adres UDW",
+    "no_subject": "pusty tytuł",
+    "no_columns": "brak kolumn",
+    "opis_required": "wiersze bez encji wymagają kolumny „Opis”",
+    "invalid_layout": "niepoprawny układ",
+}
 
 
 # ------------------------------------------------------------ pomocnicze ---
@@ -74,9 +93,11 @@ def _check_dir(path: str) -> None:
 
 def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     out = dict(data)
-    for key in (CONF_GMAIL_USER, CONF_RECIPIENT, CONF_SUBJECT, CONF_NAME, CONF_STORAGE_PATH):
+    for key in (CONF_GMAIL_USER, CONF_RECIPIENT, CONF_CC, CONF_BCC, CONF_SUBJECT, CONF_NAME, CONF_STORAGE_PATH):
         if isinstance(out.get(key), str):
             out[key] = out[key].strip()
+    if isinstance(out.get(CONF_BODY), str):
+        out[CONF_BODY] = out[CONF_BODY].strip()
     if isinstance(out.get(CONF_CRON), str):
         out[CONF_CRON] = " ".join(out[CONF_CRON].split())
     if isinstance(out.get(CONF_GMAIL_PASSWORD), str):
@@ -84,6 +105,9 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     for key in (CONF_RETRY, CONF_RETENTION):
         if key in out:
             out[key] = int(out[key])
+    for key in (CONF_CC, CONF_BCC, CONF_BODY):  # puste pola opcjonalne nie trafiają do wpisu
+        if key in out and not out[key]:
+            out.pop(key)
     return out
 
 
@@ -120,6 +144,13 @@ async def _validate_global(hass, d: dict[str, Any]) -> dict[str, str]:
     return errors
 
 
+def _valid_addresses(text: str | None, required: bool) -> bool:
+    items = split_recipients(text)
+    if not items:
+        return not required
+    return all(EMAIL_RE.match(i) for i in items)
+
+
 def _validate_report(d: dict[str, Any]) -> tuple[dict[str, str], str]:
     """Zwraca (błędy, szczegóły) - szczegóły trafiają do komunikatu {details}."""
     errors: dict[str, str] = {}
@@ -128,9 +159,12 @@ def _validate_report(d: dict[str, Any]) -> tuple[dict[str, str], str]:
         errors[CONF_NAME] = "no_name"
     if not croniter.is_valid(d.get(CONF_CRON, "")):
         errors[CONF_CRON] = "invalid_cron"
-    rcpt = split_recipients(d.get(CONF_RECIPIENT, ""))
-    if not rcpt or not all(EMAIL_RE.match(r) for r in rcpt):
+    if not _valid_addresses(d.get(CONF_RECIPIENT), True):
         errors[CONF_RECIPIENT] = "invalid_recipient"
+    if not _valid_addresses(d.get(CONF_CC), False):
+        errors[CONF_CC] = "invalid_cc"
+    if not _valid_addresses(d.get(CONF_BCC), False):
+        errors[CONF_BCC] = "invalid_bcc"
     if not d.get(CONF_SUBJECT):
         errors[CONF_SUBJECT] = "no_subject"
     if not d.get(CONF_COLUMNS):
@@ -146,7 +180,7 @@ def _validate_report(d: dict[str, Any]) -> tuple[dict[str, str], str]:
     return errors, details
 
 
-def _global_schema(hass, defaults: dict[str, Any], password_required: bool) -> vol.Schema:
+def _global_schema(defaults: dict[str, Any], password_required: bool) -> vol.Schema:
     pw = vol.Required(CONF_GMAIL_PASSWORD) if password_required else vol.Optional(CONF_GMAIL_PASSWORD)
     return vol.Schema(
         {
@@ -171,19 +205,24 @@ def _global_schema(hass, defaults: dict[str, Any], password_required: bool) -> v
                 )
             ),
             vol.Required(
-                CONF_STORAGE_PATH,
-                default=defaults.get(CONF_STORAGE_PATH) or hass.config.path("ha_mailer"),
+                CONF_STORAGE_PATH, default=defaults.get(CONF_STORAGE_PATH) or DEFAULT_FOLDER
             ): selector.TextSelector(),
         }
     )
 
 
 def _report_schema(defaults: dict[str, Any], with_entities: bool) -> vol.Schema:
+    def optional(key: str) -> vol.Optional:
+        return vol.Optional(key, description={"suggested_value": defaults.get(key)})
+
     fields: dict = {
         vol.Required(CONF_NAME, default=defaults.get(CONF_NAME, "")): selector.TextSelector(),
         vol.Required(CONF_CRON, default=defaults.get(CONF_CRON, DEFAULT_CRON)): selector.TextSelector(),
         vol.Required(CONF_RECIPIENT, default=defaults.get(CONF_RECIPIENT, "")): selector.TextSelector(),
+        optional(CONF_CC): selector.TextSelector(),
+        optional(CONF_BCC): selector.TextSelector(),
         vol.Required(CONF_SUBJECT, default=defaults.get(CONF_SUBJECT, DEFAULT_SUBJECT)): selector.TextSelector(),
+        optional(CONF_BODY): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
         vol.Required(CONF_COLUMNS, default=defaults.get(CONF_COLUMNS, DEFAULT_COLUMNS)): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[{"value": k, "label": v} for k, v in COLUMN_LABELS.items()],
@@ -228,7 +267,7 @@ class HAMailerConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_first_report()
         defaults = {k: v for k, v in (user_input or {}).items() if k != CONF_GMAIL_PASSWORD}
         return self.async_show_form(
-            step_id="user", data_schema=_global_schema(self.hass, defaults, True), errors=errors
+            step_id="user", data_schema=_global_schema(defaults, True), errors=errors
         )
 
     async def async_step_first_report(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -272,12 +311,13 @@ class HAMailerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 # ----------------------------------------------------------- opcje (menu) ---
 class HAMailerOptionsFlow(OptionsFlow):
-    """Hub: ustawienia / raporty. Zmiany zapisuje dopiero „Zapisz i zamknij”."""
+    """Wszystkie zmiany trafiają od razu do kopii roboczej. Trwale zapisuje je tylko
+    „Zapisz wszystko i zamknij”, a „Odrzuć zmiany i zamknij” kasuje całą kopię.
+    """
 
     def __init__(self) -> None:
         self._opts: dict[str, Any] = {}
         self._rid = ""  # aktualnie edytowany raport
-        self._rows: list[dict[str, str]] = []  # kopia robocza wierszy tego raportu
         self._idx = 0
         self._warning = ""
 
@@ -288,9 +328,9 @@ class HAMailerOptionsFlow(OptionsFlow):
                 return r
         raise KeyError(self._rid)
 
-    def _open_report(self, rid: str) -> None:
-        self._rid = rid
-        self._rows = _plain(self._report().get(CONF_ROWS, []))
+    @property
+    def _rows(self) -> list[dict[str, str]]:
+        return self._report().setdefault(CONF_ROWS, [])
 
     def _take_warning(self) -> str:
         text = f"**{self._warning}**\n\n" if self._warning else ""
@@ -319,16 +359,21 @@ class HAMailerOptionsFlow(OptionsFlow):
 
     @staticmethod
     def _label(i: int, row: dict[str, str], md: bool = False) -> str:
-        ent, desc = row.get(ROW_ENTITY), row.get(ROW_DESC)
+        if row.get(ROW_SHEET):
+            return f"{i}. [arkusz] {row[ROW_SHEET]}"
+        ent, attr, desc = row.get(ROW_ENTITY), row.get(ROW_ATTR), row.get(ROW_DESC)
         if ent:
             base = f"`{ent}`" if md else ent
+            if attr:
+                base += f" ({attr})"
             return f"{i}. {base}" + (f" - {desc}" if desc else "")
         return f"{i}. [opis] {desc}"
 
     def _rows_summary(self) -> str:
-        if not self._rows:
+        rows = self._rows
+        if not rows:
             return "(brak wierszy)"
-        return "\n".join(self._label(i, r, True) for i, r in enumerate(self._rows, start=1))
+        return "\n".join(self._label(i, r, True) for i, r in enumerate(rows, start=1))
 
     def _row_select(self, multiple: bool = False) -> selector.SelectSelector:
         return selector.SelectSelector(
@@ -350,14 +395,23 @@ class HAMailerOptionsFlow(OptionsFlow):
         )
 
     def _insert(self, row: dict[str, str], position: Any) -> None:
-        idx = len(self._rows) if not position else max(0, min(int(position) - 1, len(self._rows)))
-        self._rows.insert(idx, row)
+        rows = self._rows
+        idx = len(rows) if not position else max(0, min(int(position) - 1, len(rows)))
+        rows.insert(idx, row)
+
+    def _ensure_opis(self) -> None:
+        """Wiersze z samym opisem wymagają kolumny „Opis” - dodaj ją, jeśli brakuje."""
+        report = self._report()
+        columns = report.setdefault(CONF_COLUMNS, list(DEFAULT_COLUMNS))
+        if "opis" not in columns and any(is_text_row(r) for r in report[CONF_ROWS]):
+            columns.insert(1 if columns and columns[0] == "lp" else 0, "opis")
+            self._warning = "Dodano kolumnę „Opis”, bo raport ma wiersze bez encji."
 
     # ---- hub
     def _hub(self) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["settings", "report_add", "report_edit", "report_delete", "save"],
+            menu_options=["settings", "report_add", "report_edit", "report_delete", "save", "discard"],
             description_placeholders={
                 "reports": self._reports_summary(),
                 "warning": self._take_warning(),
@@ -371,10 +425,20 @@ class HAMailerOptionsFlow(OptionsFlow):
         return self._hub()
 
     async def async_step_save(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Jedyne miejsce, w którym zmiany są trwale zapisywane."""
         if not self._opts[CONF_REPORTS]:
             self._warning = "Dodaj co najmniej jeden raport."
             return self._hub()
+        for report in self._opts[CONF_REPORTS]:
+            errors, details = _validate_report(report)
+            if errors:
+                reason = details or ", ".join(ERROR_TEXTS.get(e, e) for e in errors.values())
+                self._warning = f"Nie można zapisać. Raport „{report[CONF_NAME]}”: {reason}."
+                return self._hub()
         return self.async_create_entry(title="", data=self._opts)
+
+    async def async_step_discard(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self.async_abort(reason="discarded")
 
     # ---- ustawienia wspólne
     async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -389,7 +453,7 @@ class HAMailerOptionsFlow(OptionsFlow):
                 return self._hub()
         defaults = {k: v for k, v in (user_input or self._opts).items() if k != CONF_GMAIL_PASSWORD}
         return self.async_show_form(
-            step_id="settings", data_schema=_global_schema(self.hass, defaults, False), errors=errors
+            step_id="settings", data_schema=_global_schema(defaults, False), errors=errors
         )
 
     # ---- raporty: dodawanie, wybór, usuwanie
@@ -406,7 +470,7 @@ class HAMailerOptionsFlow(OptionsFlow):
                 ids = [r[CONF_ID] for r in self._opts[CONF_REPORTS]]
                 report[CONF_ID] = _make_id(report[CONF_NAME], ids)
                 self._opts[CONF_REPORTS].append(report)
-                self._open_report(report[CONF_ID])
+                self._rid = report[CONF_ID]
                 return self._report_menu()
             user_input = {**report, CONF_ENTITIES: entities}
         return self.async_show_form(
@@ -421,7 +485,7 @@ class HAMailerOptionsFlow(OptionsFlow):
             self._warning = "Brak raportów."
             return self._hub()
         if user_input is not None:
-            self._open_report(user_input["report"])
+            self._rid = user_input["report"]
             return self._report_menu()
         return self.async_show_form(
             step_id="report_edit",
@@ -446,10 +510,11 @@ class HAMailerOptionsFlow(OptionsFlow):
         r = self._report()
         return self.async_show_menu(
             step_id="report_menu",
-            menu_options=["report_settings", "rows_visual", "layout_text", "report_back"],
+            menu_options=["report_settings", "rows_visual", "layout_text", "report_back", "save"],
             description_placeholders={
                 "name": r[CONF_NAME],
                 "info": f"`{r[CONF_CRON]}` → {r[CONF_RECIPIENT]}, {len(r[CONF_ROWS])} wierszy",
+                "warning": self._take_warning(),
             },
         )
 
@@ -462,10 +527,12 @@ class HAMailerOptionsFlow(OptionsFlow):
         report = self._report()
         if user_input is not None:
             user_input = _normalize(user_input)
-            candidate = {**report, **user_input}
+            candidate = {k: v for k, v in report.items() if k not in (CONF_CC, CONF_BCC, CONF_BODY)}
+            candidate.update(user_input)
             errors, details = _validate_report(candidate)
             if not errors:
-                report.update(user_input)
+                report.clear()
+                report.update(candidate)
                 return self._report_menu()
             report = candidate
         return self.async_show_form(
@@ -475,11 +542,13 @@ class HAMailerOptionsFlow(OptionsFlow):
             description_placeholders={"details": details},
         )
 
-    # ---- edytor graficzny wierszy (bieżący raport)
+    # ---- edytor graficzny wierszy (zmiany od razu w kopii roboczej)
     async def async_step_rows_visual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="rows_visual",
-            menu_options=["add_entity", "add_text", "edit_row", "delete_row", "move_row", "rows_save"],
+            menu_options=[
+                "add_entity", "add_text", "add_sheet", "edit_row", "delete_row", "move_row", "rows_back",
+            ],
             description_placeholders={
                 "name": self._report()[CONF_NAME],
                 "rows": self._rows_summary(),
@@ -487,9 +556,15 @@ class HAMailerOptionsFlow(OptionsFlow):
             },
         )
 
+    async def async_step_rows_back(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self._report_menu()
+
     async def async_step_add_entity(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             row = {ROW_ENTITY: user_input[ROW_ENTITY]}
+            attr = (user_input.get(ROW_ATTR) or "").strip()
+            if attr:
+                row[ROW_ATTR] = attr
             desc = (user_input.get(ROW_DESC) or "").strip()
             if desc:
                 row[ROW_DESC] = desc
@@ -500,6 +575,7 @@ class HAMailerOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(ROW_ENTITY): selector.EntitySelector(),
+                    vol.Optional(ROW_ATTR): selector.TextSelector(),
                     vol.Optional(ROW_DESC): selector.TextSelector(),
                     vol.Optional("position"): self._position(len(self._rows) + 1),
                 }
@@ -512,6 +588,7 @@ class HAMailerOptionsFlow(OptionsFlow):
             desc = (user_input.get(ROW_DESC) or "").strip()
             if desc:
                 self._insert({ROW_DESC: desc}, user_input.get("position"))
+                self._ensure_opis()
                 return await self.async_step_rows_visual()
             errors["base"] = "row_empty"
         return self.async_show_form(
@@ -519,6 +596,25 @@ class HAMailerOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(ROW_DESC): selector.TextSelector(),
+                    vol.Optional("position"): self._position(len(self._rows) + 1),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_add_sheet(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = (user_input.get(ROW_SHEET) or "").strip()
+            if name:
+                self._insert({ROW_SHEET: name}, user_input.get("position"))
+                return await self.async_step_rows_visual()
+            errors["base"] = "row_empty"
+        return self.async_show_form(
+            step_id="add_sheet",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(ROW_SHEET): selector.TextSelector(),
                     vol.Optional("position"): self._position(len(self._rows) + 1),
                 }
             ),
@@ -540,31 +636,46 @@ class HAMailerOptionsFlow(OptionsFlow):
     async def async_step_edit_row_form(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         row = self._rows[self._idx]
+        is_sheet = bool(row.get(ROW_SHEET))
         if user_input is not None:
             new: dict[str, str] = {}
-            if user_input.get(ROW_ENTITY):
-                new[ROW_ENTITY] = user_input[ROW_ENTITY]
-            desc = (user_input.get(ROW_DESC) or "").strip()
-            if desc:
-                new[ROW_DESC] = desc
+            if is_sheet:
+                if (user_input.get(ROW_SHEET) or "").strip():
+                    new[ROW_SHEET] = user_input[ROW_SHEET].strip()
+            else:
+                if user_input.get(ROW_ENTITY):
+                    new[ROW_ENTITY] = user_input[ROW_ENTITY]
+                    attr = (user_input.get(ROW_ATTR) or "").strip()
+                    if attr:
+                        new[ROW_ATTR] = attr
+                desc = (user_input.get(ROW_DESC) or "").strip()
+                if desc:
+                    new[ROW_DESC] = desc
             if new:
                 self._rows[self._idx] = new
+                self._ensure_opis()
                 return await self.async_step_rows_visual()
             errors["base"] = "row_empty"
             row = user_input
-        return self.async_show_form(
-            step_id="edit_row_form",
-            data_schema=vol.Schema(
+
+        def suggest(key: str) -> dict[str, Any]:
+            return {"suggested_value": row.get(key)}
+
+        if is_sheet:
+            schema = vol.Schema(
+                {vol.Required(ROW_SHEET, description=suggest(ROW_SHEET)): selector.TextSelector()}
+            )
+        else:
+            schema = vol.Schema(
                 {
-                    vol.Optional(
-                        ROW_ENTITY, description={"suggested_value": row.get(ROW_ENTITY)}
-                    ): selector.EntitySelector(),
-                    vol.Optional(
-                        ROW_DESC, description={"suggested_value": row.get(ROW_DESC)}
-                    ): selector.TextSelector(),
+                    vol.Optional(ROW_ENTITY, description=suggest(ROW_ENTITY)): selector.EntitySelector(),
+                    vol.Optional(ROW_ATTR, description=suggest(ROW_ATTR)): selector.TextSelector(),
+                    vol.Optional(ROW_DESC, description=suggest(ROW_DESC)): selector.TextSelector(),
                 }
-            ),
-            errors=errors,
+            )
+        return self.async_show_form(
+            step_id="edit_row_form", data_schema=schema, errors=errors,
+            description_placeholders={"kind": "arkusza" if is_sheet else "wiersza"},
         )
 
     async def async_step_delete_row(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -573,7 +684,8 @@ class HAMailerOptionsFlow(OptionsFlow):
             return await self.async_step_rows_visual()
         if user_input is not None:
             drop = {int(i) for i in user_input.get("rows", [])}
-            self._rows = [r for i, r in enumerate(self._rows) if i not in drop]
+            report = self._report()
+            report[CONF_ROWS] = [r for i, r in enumerate(report[CONF_ROWS]) if i not in drop]
             return await self.async_step_rows_visual()
         return self.async_show_form(
             step_id="delete_row",
@@ -585,9 +697,10 @@ class HAMailerOptionsFlow(OptionsFlow):
             self._warning = "Brak wierszy."
             return await self.async_step_rows_visual()
         if user_input is not None:
-            item = self._rows.pop(int(user_input["row"]))
-            pos = max(1, min(int(user_input["position"]), len(self._rows) + 1))
-            self._rows.insert(pos - 1, item)
+            rows = self._rows
+            item = rows.pop(int(user_input["row"]))
+            pos = max(1, min(int(user_input["position"]), len(rows) + 1))
+            rows.insert(pos - 1, item)
             return await self.async_step_rows_visual()
         return self.async_show_form(
             step_id="move_row",
@@ -598,22 +711,6 @@ class HAMailerOptionsFlow(OptionsFlow):
                 }
             ),
         )
-
-    async def async_step_rows_save(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Zapisuje wiersze do raportu (w pamięci hubu), wraca do menu raportu."""
-        report = self._report()
-        columns = list(report.get(CONF_COLUMNS, DEFAULT_COLUMNS))
-        err = layout_error(columns, self._rows)
-        if err and ERR_OPIS in err:
-            # wiersze z samym opisem wymagają kolumny "opis" - dodajemy ją automatycznie
-            columns.insert(1 if columns and columns[0] == "lp" else 0, "opis")
-            report[CONF_COLUMNS] = columns
-            err = layout_error(columns, self._rows)
-        if err:
-            self._warning = f"Nie można zapisać: {err}"
-            return await self.async_step_rows_visual()
-        report[CONF_ROWS] = _plain(self._rows)
-        return self._report_menu()
 
     # ---- edycja tekstowa (YAML) bieżącego raportu
     async def async_step_layout_text(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -644,7 +741,6 @@ class HAMailerOptionsFlow(OptionsFlow):
                 else:
                     report[CONF_COLUMNS] = _plain(valid[CONF_COLUMNS])
                     report[CONF_ROWS] = _plain(valid[CONF_ROWS])
-                    self._rows = _plain(report[CONF_ROWS])
                     return self._report_menu()
         return self.async_show_form(
             step_id="layout_text",
