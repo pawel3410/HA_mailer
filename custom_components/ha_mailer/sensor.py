@@ -4,8 +4,6 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
@@ -19,6 +17,7 @@ from . import (
     ROW_ENTITY,
     SIGNAL,
     HAMailer,
+    count_sheets,
 )
 
 
@@ -27,21 +26,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     entities: list[SensorEntity] = [PendingSensor(m)]
     for rid in m.reports:
         entities += [StatusSensor(m, rid), LastSentSensor(m, rid), StatsSensor(m, rid)]
-
-    # sprzątanie po usuniętych raportach
-    expected_ids = {e.unique_id for e in entities}
-    ent_reg = er.async_get(hass)
-    for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
-        if ent.unique_id not in expected_ids:
-            ent_reg.async_remove(ent.entity_id)
-    expected_dev = {(DOMAIN, entry.entry_id)} | {
-        (DOMAIN, f"{entry.entry_id}_{rid}") for rid in m.reports
-    }
-    dev_reg = dr.async_get(hass)
-    for dev in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
-        if not (dev.identifiers & expected_dev):
-            dev_reg.async_remove_device(dev.id)
-
     async_add_entities(entities)
 
 
@@ -54,19 +38,8 @@ class _Base(SensorEntity):
         self._m = mailer
         self._rid = rid
         eid = mailer.entry.entry_id
-        if rid is None:
-            self._attr_unique_id = f"{eid}_{self._key}"
-            self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, eid)}, name="HA_mailer", manufacturer="HA_mailer"
-            )
-        else:
-            self._attr_unique_id = f"{eid}_{rid}_{self._key}"
-            self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, f"{eid}_{rid}")},
-                name=mailer.reports[rid][CONF_NAME],
-                manufacturer="HA_mailer",
-                via_device=(DOMAIN, eid),
-            )
+        self._attr_unique_id = f"{eid}_{self._key}" if rid is None else f"{eid}_{rid}_{self._key}"
+        self._attr_device_info = mailer.device_info(rid)
 
     @property
     def _stats(self) -> dict:
@@ -100,7 +73,8 @@ class StatusSensor(_Base):
         return {
             "blad": s["last_error"] if s["status"] == "error" else None,
             "ostatnia_proba": s["last_attempt"],
-            "oczekujace_ponowienia": len(self._m.pending_for(self._rid)),
+            "oczekujace_pliki": len(self._m.pending_for(self._rid)),
+            "aktywny": self._m.enabled.get(self._rid, True),
             "odbiorca": self._m.reports[self._rid][CONF_RECIPIENT],
         }
 
@@ -150,6 +124,7 @@ class StatsSensor(_Base):
             "nastepna_wysylka": nxt.isoformat() if nxt else None,
             "liczba_encji": sum(1 for r in rows if r.get(ROW_ENTITY)),
             "liczba_wierszy": len(rows),
+            "liczba_arkuszy": count_sheets(rows),
         }
 
 
@@ -171,6 +146,7 @@ class PendingSensor(_Base):
                 {
                     "raport": m.reports.get(i["report"], {}).get(CONF_NAME, i["report"]),
                     "plik": i["file"],
+                    "zapisany_na_dysku": i.get("stored", True),
                     "utworzono": i["created"],
                     "nieudane_proby": i["attempts"],
                     "nastepna_proba": i["next_try"],
@@ -179,6 +155,7 @@ class PendingSensor(_Base):
                 for i in m.pending
             ],
             "katalog_plikow": m.folder,
-            "zapisane_pliki": len(m.files),
+            "katalog_dostepny": m.folder_ok,
+            "pliki_w_katalogu": m.file_count,
             "retencja_dni": m.cfg.get(CONF_RETENTION, DEFAULT_RETENTION),
         }
