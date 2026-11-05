@@ -14,9 +14,9 @@
         "data_description": {
           "gmail_user": "Wspólne konto Gmail, z którego wysyłane są wszystkie raporty.",
           "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
-          "retry_minutes": "Gdy wysyłka z harmonogramu się nie uda, ten sam plik jest wysyłany ponownie co tyle minut, aż do skutku.",
-          "retention_days": "Pliki starsze niż podana liczba dni są usuwane (poza czekającymi na ponowienie).",
-          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu /config."
+          "retry_minutes": "Nieudana wysyłka jest ponawiana tym samym plikiem co tyle minut, aż do skutku.",
+          "retention_days": "Pliki raportów starsze niż podana liczba dni (wg daty zapisu pliku) są usuwane z folderu.",
+          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu z configuration.yaml (domyślnie HA_mailer_reports)."
         }
       },
       "first_report": {
@@ -26,7 +26,10 @@
           "name": "Nazwa raportu",
           "cron": "Harmonogram (cron)",
           "recipient": "Adres odbiorcy",
+          "cc": "DW (kopia, opcjonalnie)",
+          "bcc": "UDW (ukryta kopia, opcjonalnie)",
           "subject": "Stały tytuł maila",
+          "body": "Własna treść maila (opcjonalnie)",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
           "entities": "Encje"
         },
@@ -34,9 +37,12 @@
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "cc": "Adresy w kopii (widoczne dla odbiorców), oddzielone przecinkiem.",
+          "bcc": "Adresy w ukrytej kopii (niewidoczne dla pozostałych), oddzielone przecinkiem.",
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
-          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
+          "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
         }
       }
     },
@@ -46,12 +52,14 @@
       "invalid_cron": "Nieprawidłowe wyrażenie cron.",
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
+      "invalid_cc": "Nieprawidłowy adres w polu DW.",
+      "invalid_bcc": "Nieprawidłowy adres w polu UDW.",
       "no_subject": "Tytuł nie może być pusty.",
       "no_columns": "Wybierz co najmniej jedną kolumnę.",
       "opis_required": "Masz wiersze bez encji - dodaj kolumnę „Opis”.",
       "invalid_layout": "Niepoprawny układ: {details}",
       "invalid_yaml": "Niepoprawny YAML: {details}",
-      "row_empty": "Wiersz musi mieć encję lub opis.",
+      "row_empty": "Podaj encję, opis lub nazwę arkusza.",
       "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
       "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
@@ -66,13 +74,14 @@
     "step": {
       "init": {
         "title": "HA_mailer",
-        "description": "{warning}Raporty:\n\n{reports}\n\nZmiany zapisze dopiero „Zapisz i zamknij”, zamknięcie okna je odrzuca.",
+        "description": "{warning}Raporty:\n\n{reports}\n\nZmiany są trwale zapisywane dopiero po „Zapisz wszystko i zamknij”. „Odrzuć zmiany i zamknij” kasuje wszystko, co zmieniono w tej sesji.",
         "menu_options": {
-          "settings": "Ustawienia wspólne (Gmail, ponawianie, archiwum)",
+          "settings": "Ustawienia wspólne (Gmail, ponawianie, folder, retencja)",
           "report_add": "Dodaj raport",
           "report_edit": "Edytuj raport",
           "report_delete": "Usuń raporty",
-          "save": "Zapisz i zamknij"
+          "save": "Zapisz wszystko i zamknij",
+          "discard": "Odrzuć zmiany i zamknij"
         }
       },
       "settings": {
@@ -87,9 +96,9 @@
         "data_description": {
           "gmail_user": "Wspólne konto Gmail, z którego wysyłane są wszystkie raporty.",
           "gmail_app_password": "16-znakowe hasło aplikacji (wymaga weryfikacji dwuetapowej), nie zwykłe hasło.",
-          "retry_minutes": "Gdy wysyłka z harmonogramu się nie uda, ten sam plik jest wysyłany ponownie co tyle minut, aż do skutku.",
-          "retention_days": "Pliki starsze niż podana liczba dni są usuwane (poza czekającymi na ponowienie).",
-          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu /config."
+          "retry_minutes": "Nieudana wysyłka jest ponawiana tym samym plikiem co tyle minut, aż do skutku.",
+          "retention_days": "Pliki raportów starsze niż podana liczba dni (wg daty zapisu pliku) są usuwane z folderu.",
+          "storage_path": "Wspólny folder dla wszystkich raportów. Ścieżka względna jest liczona od katalogu z configuration.yaml (domyślnie HA_mailer_reports)."
         }
       },
       "report_add": {
@@ -99,7 +108,10 @@
           "name": "Nazwa raportu",
           "cron": "Harmonogram (cron)",
           "recipient": "Adres odbiorcy",
+          "cc": "DW (kopia, opcjonalnie)",
+          "bcc": "UDW (ukryta kopia, opcjonalnie)",
           "subject": "Stały tytuł maila",
+          "body": "Własna treść maila (opcjonalnie)",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
           "entities": "Encje"
         },
@@ -107,9 +119,12 @@
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "cc": "Adresy w kopii (widoczne dla odbiorców), oddzielone przecinkiem.",
+          "bcc": "Adresy w ukrytej kopii (niewidoczne dla pozostałych), oddzielone przecinkiem.",
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
-          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
+          "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
         }
       },
       "report_edit": {
@@ -120,19 +135,20 @@
       },
       "report_delete": {
         "title": "Usuwanie raportów",
-        "description": "Oczekujące ponowienia usuniętych raportów zostaną porzucone.",
+        "description": "Oczekujące pliki usuniętych raportów zostaną porzucone po zapisaniu zmian.",
         "data": {
           "reports": "Raporty do usunięcia"
         }
       },
       "report_menu": {
         "title": "Raport",
-        "description": "**{name}**\n\n{info}",
+        "description": "{warning}**{name}**\n\n{info}",
         "menu_options": {
-          "report_settings": "Ustawienia raportu (nazwa, harmonogram, odbiorca, tytuł, kolumny)",
+          "report_settings": "Ustawienia raportu (nazwa, harmonogram, adresy, tytuł, treść, kolumny)",
           "rows_visual": "Wiersze - edytor graficzny",
           "layout_text": "Kolumny i wiersze - edycja tekstowa (YAML)",
-          "report_back": "Wróć do listy raportów"
+          "report_back": "Wróć do listy raportów",
+          "save": "Zapisz wszystko i zamknij"
         }
       },
       "report_settings": {
@@ -142,34 +158,42 @@
           "name": "Nazwa raportu",
           "cron": "Harmonogram (cron)",
           "recipient": "Adres odbiorcy",
+          "cc": "DW (kopia, opcjonalnie)",
+          "bcc": "UDW (ukryta kopia, opcjonalnie)",
           "subject": "Stały tytuł maila",
+          "body": "Własna treść maila (opcjonalnie)",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
         },
         "data_description": {
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
           "cron": "5 pól: minuta godzina dzień-miesiąca miesiąc dzień-tygodnia, np. 0 8 * * * = codziennie o 8:00 (strefa czasowa HA).",
           "recipient": "Jeden lub kilka adresów oddzielonych przecinkiem.",
+          "cc": "Adresy w kopii (widoczne dla odbiorców), oddzielone przecinkiem.",
+          "bcc": "Adresy w ukrytej kopii (niewidoczne dla pozostałych), oddzielone przecinkiem.",
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
-          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy i wiersze bez encji ustawisz później w Konfiguruj."
+          "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
+          "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
+          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
         }
       },
       "rows_visual": {
         "title": "Wiersze",
-        "description": "{warning}Raport: **{name}**\n\nAktualne wiersze:\n\n{rows}\n\nWiersze z encją pokazują jej wartość, wiersze z samym opisem służą jako nagłówki lub separatory (wymagają kolumny „Opis”, zostanie dodana automatycznie). „Zapisz wiersze” przenosi zmiany do raportu, a trwale zapiszesz je dopiero w „Zapisz i zamknij” na liście raportów.",
+        "description": "{warning}Raport: **{name}**\n\nAktualne wiersze:\n\n{rows}\n\nWiersz z encją pokazuje jej wartość (lub wskazany atrybut). Wiersz z samym opisem to nagłówek lub separator. Wiersz „arkusz” rozpoczyna nowy arkusz Excela od tego miejsca. Zmiany są od razu widoczne w tej sesji, a trwale zapisze je „Zapisz wszystko i zamknij”.",
         "menu_options": {
           "add_entity": "Dodaj wiersz z encją",
           "add_text": "Dodaj wiersz z samym opisem",
+          "add_sheet": "Dodaj nowy arkusz",
           "edit_row": "Edytuj wiersz",
           "delete_row": "Usuń wiersze",
           "move_row": "Przesuń wiersz",
-          "rows_save": "Zapisz wiersze"
+          "rows_back": "Wróć do menu raportu"
         }
       },
       "add_entity": {
         "title": "Nowy wiersz z encją",
         "data": {
           "entity": "Encja",
+          "attribute": "Atrybut (opcjonalnie, zamiast stanu)",
           "description": "Opis (opcjonalnie)",
           "position": "Pozycja (puste = na końcu)"
         }
@@ -181,6 +205,14 @@
           "position": "Pozycja (puste = na końcu)"
         }
       },
+      "add_sheet": {
+        "title": "Nowy arkusz",
+        "description": "Wiersze od wskazanego miejsca trafią do nowego arkusza, a numeracja Lp. zacznie się od 1.",
+        "data": {
+          "sheet": "Nazwa arkusza",
+          "position": "Pozycja (puste = na końcu)"
+        }
+      },
       "edit_row": {
         "title": "Edycja wiersza",
         "data": {
@@ -188,11 +220,13 @@
         }
       },
       "edit_row_form": {
-        "title": "Edycja wiersza",
+        "title": "Edycja {kind}",
         "description": "Puste pole encji zamienia wiersz w wiersz z samym opisem.",
         "data": {
           "entity": "Encja",
-          "description": "Opis"
+          "attribute": "Atrybut",
+          "description": "Opis",
+          "sheet": "Nazwa arkusza"
         }
       },
       "delete_row": {
@@ -210,7 +244,7 @@
       },
       "layout_text": {
         "title": "Kolumny i wiersze (YAML)",
-        "description": "Raport: **{name}**. Edytuj układ jako YAML. columns - kolumny w kolejności (lp, opis, encja, nazwa, wartosc, jednostka, zmiana). rows - wiersze: entity (opcjonalnie) i description (opcjonalnie). Wiersz bez entity to wiersz z samym opisem i wymaga kolumny opis.",
+        "description": "Raport: **{name}**. Edytuj układ jako YAML. columns - kolumny w kolejności (lp, opis, encja, atrybut, nazwa, wartosc, jednostka, zmiana). rows - wiersze: entity, attribute, description (wszystkie opcjonalne) albo sheet (nowy arkusz). Wiersz bez entity i bez sheet to wiersz z samym opisem i wymaga kolumny opis.",
         "data": {
           "layout_yaml": "Układ (YAML)"
         }
@@ -222,16 +256,31 @@
       "invalid_cron": "Nieprawidłowe wyrażenie cron.",
       "invalid_email": "Nieprawidłowy adres e-mail.",
       "invalid_recipient": "Nieprawidłowy adres odbiorcy.",
+      "invalid_cc": "Nieprawidłowy adres w polu DW.",
+      "invalid_bcc": "Nieprawidłowy adres w polu UDW.",
       "no_subject": "Tytuł nie może być pusty.",
       "no_columns": "Wybierz co najmniej jedną kolumnę.",
       "opis_required": "Masz wiersze bez encji - dodaj kolumnę „Opis”.",
       "invalid_layout": "Niepoprawny układ: {details}",
       "invalid_yaml": "Niepoprawny YAML: {details}",
-      "row_empty": "Wiersz musi mieć encję lub opis.",
+      "row_empty": "Podaj encję, opis lub nazwę arkusza.",
       "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
       "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
       "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+    },
+    "abort": {
+      "discarded": "Zmiany odrzucone, konfiguracja pozostała bez zmian."
+    }
+  },
+  "issues": {
+    "send_failed": {
+      "title": "HA_mailer: nie udało się wysłać raportu „{report}”",
+      "description": "Raport „{report}” nie został wysłany.\n\nBłąd: {error}\n\nPliki czekają w kolejce i są wysyłane ponownie. Usuń przyczynę błędu albo użyj akcji ha_mailer.clear_pending, aby porzucić kolejkę."
+    },
+    "storage_unavailable": {
+      "title": "HA_mailer: folder na raporty jest niedostępny",
+      "description": "Nie można zapisać plików w folderze {path}.\n\nBłąd: {error}\n\nRaporty są nadal tworzone i wysyłane z pamięci, ale nie są archiwizowane (utracisz je przy restarcie, jeśli wysyłka się nie uda). Sprawdź ścieżkę i uprawnienia w ustawieniach wspólnych."
     }
   },
   "services": {
@@ -251,7 +300,7 @@
     },
     "clear_pending": {
       "name": "Porzuć oczekujące wysyłki",
-      "description": "Przerywa ponawianie nieudanych wysyłek. Pliki zostają w folderze do końca czasu przechowywania.",
+      "description": "Przerywa wysyłanie plików z kolejki. Pliki zostają w folderze do końca czasu przechowywania.",
       "fields": {
         "entry_id": {
           "name": "Konfiguracja",
