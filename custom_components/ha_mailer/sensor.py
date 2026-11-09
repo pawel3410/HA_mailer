@@ -12,6 +12,7 @@ from . import (
     CONF_RECIPIENT,
     CONF_RETENTION,
     CONF_ROWS,
+    CONF_TEMPLATE,
     DEFAULT_RETENTION,
     DOMAIN,
     ROW_ENTITY,
@@ -110,7 +111,9 @@ class StatsSensor(_Base):
     def extra_state_attributes(self) -> dict:
         s = self._stats
         total = s["ok"] + s["fail"]
-        rows = self._m.reports[self._rid][CONF_ROWS]
+        report = self._m.reports[self._rid]
+        rows = report.get(CONF_ROWS, [])
+        templated = bool(report.get(CONF_TEMPLATE))
         nxt = self._m.next_runs.get(self._rid)
         return {
             "udane": s["ok"],
@@ -122,9 +125,11 @@ class StatsSensor(_Base):
             "czas_ostatniego_bledu": s["last_error_time"],
             "rozmiar_ostatniego_pliku_kb": s["last_file_kb"],
             "nastepna_wysylka": nxt.isoformat() if nxt else None,
-            "liczba_encji": sum(1 for r in rows if r.get(ROW_ENTITY)),
-            "liczba_wierszy": len(rows),
-            "liczba_arkuszy": count_sheets(rows),
+            "szablon": report.get(CONF_TEMPLATE),
+            "liczba_encji": s["last_entities"] if templated else sum(1 for r in rows if r.get(ROW_ENTITY)),
+            "ostrzezenia_w_ostatnim_pliku": s["last_warnings"],
+            "liczba_wierszy": None if templated else len(rows),
+            "liczba_arkuszy": None if templated else count_sheets(rows),
         }
 
 
