@@ -31,7 +31,8 @@
           "subject": "Stały tytuł maila",
           "body": "Własna treść maila (opcjonalnie)",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
-          "entities": "Encje"
+          "entities": "Encje",
+          "template": "Szablon Excel (opcjonalnie, ścieżka do pliku .xlsx)"
         },
         "data_description": {
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
@@ -42,7 +43,8 @@
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
           "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
           "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
+          "entities": "Encje trafią do pliku w tej kolejności. Wymagane, jeśli nie używasz szablonu. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj.",
+          "template": "Plik .xlsx ze znacznikami w komórkach, zapisanymi w podwójnych nawiasach klamrowych: stan encji (domena.encja), atrybut (domena.encja.atrybut), przyrostki #nazwa, #jednostka, #zmiana oraz raport, data, czas, data_czas, ostrzezenia. Ścieżka względna jest liczona od katalogu z configuration.yaml. Przy szablonie kolumny i wiersze są ignorowane. Szczegóły w README."
         }
       }
     },
@@ -63,7 +65,12 @@
       "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
       "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
-      "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+      "cannot_connect": "Nie można połączyć się z smtp.gmail.com.",
+      "no_rows": "Dodaj wiersze albo podaj szablon Excel.",
+      "invalid_template_ext": "Szablon musi być plikiem z rozszerzeniem .xlsx.",
+      "template_not_found": "Nie znaleziono pliku szablonu. Sprawdź ścieżkę.",
+      "template_invalid": "Nie można wczytać szablonu. Czy to poprawny plik .xlsx?",
+      "template_tokens": "Nieznane znaczniki w szablonie: {details}"
     },
     "abort": {
       "already_configured": "Konfiguracja YAML jest już zaimportowana.",
@@ -113,7 +120,8 @@
           "subject": "Stały tytuł maila",
           "body": "Własna treść maila (opcjonalnie)",
           "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
-          "entities": "Encje"
+          "entities": "Encje",
+          "template": "Szablon Excel (opcjonalnie, ścieżka do pliku .xlsx)"
         },
         "data_description": {
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
@@ -124,7 +132,8 @@
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
           "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
           "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
+          "entities": "Encje trafią do pliku w tej kolejności. Wymagane, jeśli nie używasz szablonu. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj.",
+          "template": "Plik .xlsx ze znacznikami w komórkach, zapisanymi w podwójnych nawiasach klamrowych: stan encji (domena.encja), atrybut (domena.encja.atrybut), przyrostki #nazwa, #jednostka, #zmiana oraz raport, data, czas, data_czas, ostrzezenia. Ścieżka względna jest liczona od katalogu z configuration.yaml. Przy szablonie kolumny i wiersze są ignorowane. Szczegóły w README."
         }
       },
       "report_edit": {
@@ -162,7 +171,8 @@
           "bcc": "UDW (ukryta kopia, opcjonalnie)",
           "subject": "Stały tytuł maila",
           "body": "Własna treść maila (opcjonalnie)",
-          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)"
+          "columns": "Kolumny w pliku (kolejność wyboru = kolejność kolumn)",
+          "template": "Szablon Excel (opcjonalnie, ścieżka do pliku .xlsx)"
         },
         "data_description": {
           "name": "Nazwa raportu, widoczna też w nazwie urządzenia i w mailu.",
@@ -173,7 +183,8 @@
           "subject": "Do tytułu automatycznie dodawana jest data i godzina utworzenia raportu.",
           "body": "Znaczniki: [raport] - nazwa, [data] - czas utworzenia, [liczba_encji], [ostrzezenia] - liczba encji niedostępnych lub brakujących. Puste pole = treść domyślna.",
           "columns": "Czego nie wybierzesz, tego nie będzie w pliku. Kolumna Atrybut jest potrzebna, gdy w wierszach podajesz atrybuty encji. Aby zmienić kolejność, odznacz i zaznacz kolumny ponownie albo użyj edycji tekstowej.",
-          "entities": "Encje trafią do pliku w tej kolejności. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj."
+          "entities": "Encje trafią do pliku w tej kolejności. Wymagane, jeśli nie używasz szablonu. Opisy, atrybuty, arkusze i wiersze bez encji ustawisz później w Konfiguruj.",
+          "template": "Plik .xlsx ze znacznikami w komórkach, zapisanymi w podwójnych nawiasach klamrowych: stan encji (domena.encja), atrybut (domena.encja.atrybut), przyrostki #nazwa, #jednostka, #zmiana oraz raport, data, czas, data_czas, ostrzezenia. Ścieżka względna jest liczona od katalogu z configuration.yaml. Przy szablonie kolumny i wiersze są ignorowane. Szczegóły w README."
         }
       },
       "rows_visual": {
@@ -267,7 +278,12 @@
       "invalid_retry": "Interwał ponawiania musi wynosić co najmniej 1 minutę.",
       "path_not_writable": "Nie można utworzyć folderu lub zapisać w nim plików. Sprawdź ścieżkę i uprawnienia.",
       "auth_failed": "Logowanie do Gmaila nie powiodło się - sprawdź adres i hasło aplikacji.",
-      "cannot_connect": "Nie można połączyć się z smtp.gmail.com."
+      "cannot_connect": "Nie można połączyć się z smtp.gmail.com.",
+      "no_rows": "Dodaj wiersze albo podaj szablon Excel.",
+      "invalid_template_ext": "Szablon musi być plikiem z rozszerzeniem .xlsx.",
+      "template_not_found": "Nie znaleziono pliku szablonu. Sprawdź ścieżkę.",
+      "template_invalid": "Nie można wczytać szablonu. Czy to poprawny plik .xlsx?",
+      "template_tokens": "Nieznane znaczniki w szablonie: {details}"
     },
     "abort": {
       "discarded": "Zmiany odrzucone, konfiguracja pozostała bez zmian."
