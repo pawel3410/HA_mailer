@@ -35,6 +35,7 @@ from . import (
     CONF_ROWS,
     CONF_STORAGE_PATH,
     CONF_SUBJECT,
+    CONF_TEMPLATE,
     CONF_YAML_HASH,
     DEFAULT_COLUMNS,
     DEFAULT_CRON,
@@ -54,6 +55,8 @@ from . import (
     ROW_SHEET,
     is_text_row,
     layout_error,
+    parse_token,
+    scan_template,
     split_recipients,
     yaml_digest,
 )
@@ -68,6 +71,11 @@ ERROR_TEXTS = {
     "no_columns": "brak kolumn",
     "opis_required": "wiersze bez encji wymagają kolumny „Opis”",
     "invalid_layout": "niepoprawny układ",
+    "no_rows": "brak wierszy i szablonu",
+    "invalid_template_ext": "szablon musi być plikiem .xlsx",
+    "template_not_found": "nie znaleziono szablonu",
+    "template_invalid": "nie można wczytać szablonu",
+    "template_tokens": "nieznane znaczniki w szablonie",
 }
 
 
@@ -93,7 +101,7 @@ def _check_dir(path: str) -> None:
 
 def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     out = dict(data)
-    for key in (CONF_GMAIL_USER, CONF_RECIPIENT, CONF_CC, CONF_BCC, CONF_SUBJECT, CONF_NAME, CONF_STORAGE_PATH):
+    for key in (CONF_GMAIL_USER, CONF_RECIPIENT, CONF_CC, CONF_BCC, CONF_SUBJECT, CONF_NAME, CONF_STORAGE_PATH, CONF_TEMPLATE):
         if isinstance(out.get(key), str):
             out[key] = out[key].strip()
     if isinstance(out.get(CONF_BODY), str):
@@ -105,7 +113,7 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     for key in (CONF_RETRY, CONF_RETENTION):
         if key in out:
             out[key] = int(out[key])
-    for key in (CONF_CC, CONF_BCC, CONF_BODY):  # puste pola opcjonalne nie trafiają do wpisu
+    for key in (CONF_CC, CONF_BCC, CONF_BODY, CONF_TEMPLATE):  # puste pola opcjonalne nie trafiają do wpisu
         if key in out and not out[key]:
             out.pop(key)
     return out
@@ -167,8 +175,14 @@ def _validate_report(d: dict[str, Any]) -> tuple[dict[str, str], str]:
         errors[CONF_BCC] = "invalid_bcc"
     if not d.get(CONF_SUBJECT):
         errors[CONF_SUBJECT] = "no_subject"
-    if not d.get(CONF_COLUMNS):
+    if d.get(CONF_TEMPLATE):
+        # przy szablonie kolumny i wiersze nie są używane
+        if not str(d[CONF_TEMPLATE]).lower().endswith(".xlsx"):
+            errors[CONF_TEMPLATE] = "invalid_template_ext"
+    elif not d.get(CONF_COLUMNS):
         errors[CONF_COLUMNS] = "no_columns"
+    elif not d.get(CONF_ROWS):
+        errors["base"] = "no_rows"
     else:
         err = layout_error(d.get(CONF_COLUMNS), d.get(CONF_ROWS))
         if err:
@@ -177,6 +191,34 @@ def _validate_report(d: dict[str, Any]) -> tuple[dict[str, str], str]:
             else:
                 errors["base"] = "invalid_layout"
                 details = err
+    return errors, details
+
+
+async def _validate_template(hass, path: str) -> tuple[str | None, str]:
+    """Sprawdza, czy szablon istnieje, da się wczytać i ma poprawne znaczniki."""
+    try:
+        _, tokens = await hass.async_add_executor_job(scan_template, hass.config.path(path))
+    except FileNotFoundError:
+        return "template_not_found", ""
+    except Exception:  # noqa: BLE001
+        return "template_invalid", ""
+    unknown = [f"{{{{{t}}}}}" for t in tokens if parse_token(t) is None]
+    if unknown:
+        return "template_tokens", ", ".join(unknown)
+    return None, ""
+
+
+async def _check_report(hass, report: dict[str, Any], entities: list[str] | None = None) -> tuple[dict[str, str], str]:
+    """Pełna walidacja raportu z formularza (w tym szablonu). `entities` dotyczy kroku dodawania."""
+    errors, details = _validate_report(report)
+    if entities is not None and not entities and not report.get(CONF_TEMPLATE):
+        errors.pop("base", None)
+        errors[CONF_ENTITIES] = "no_entities"
+    if not errors and report.get(CONF_TEMPLATE):
+        err, det = await _validate_template(hass, report[CONF_TEMPLATE])
+        if err:
+            errors[CONF_TEMPLATE] = err
+            details = det
     return errors, details
 
 
@@ -223,6 +265,7 @@ def _report_schema(defaults: dict[str, Any], with_entities: bool) -> vol.Schema:
         optional(CONF_BCC): selector.TextSelector(),
         vol.Required(CONF_SUBJECT, default=defaults.get(CONF_SUBJECT, DEFAULT_SUBJECT)): selector.TextSelector(),
         optional(CONF_BODY): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+        optional(CONF_TEMPLATE): selector.TextSelector(),
         vol.Required(CONF_COLUMNS, default=defaults.get(CONF_COLUMNS, DEFAULT_COLUMNS)): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[{"value": k, "label": v} for k, v in COLUMN_LABELS.items()],
@@ -233,7 +276,7 @@ def _report_schema(defaults: dict[str, Any], with_entities: bool) -> vol.Schema:
         ),
     }
     if with_entities:
-        fields[vol.Required(CONF_ENTITIES, default=defaults.get(CONF_ENTITIES, []))] = (
+        fields[vol.Optional(CONF_ENTITIES, default=defaults.get(CONF_ENTITIES, []))] = (
             selector.EntitySelector(selector.EntitySelectorConfig(multiple=True))
         )
     return vol.Schema(fields)
@@ -276,10 +319,7 @@ class HAMailerConfigFlow(ConfigFlow, domain=DOMAIN):
         details = ""
         if user_input is not None:
             report, entities = _report_from_form(user_input)
-            if not entities:
-                errors[CONF_ENTITIES] = "no_entities"
-            else:
-                errors, details = _validate_report(report)
+            errors, details = await _check_report(self.hass, report, entities)
             if not errors:
                 report[CONF_ID] = _make_id(report[CONF_NAME], [])
                 data = {**self._data, CONF_REPORTS: [report]}
@@ -342,7 +382,8 @@ class HAMailerOptionsFlow(OptionsFlow):
         if not reports:
             return "(brak raportów)"
         return "\n".join(
-            f"{i}. **{r[CONF_NAME]}** - `{r[CONF_CRON]}` → {r[CONF_RECIPIENT]} ({len(r[CONF_ROWS])} wierszy)"
+            f"{i}. **{r[CONF_NAME]}** - `{r[CONF_CRON]}` → {r[CONF_RECIPIENT]} "
+            f"({'szablon ' + r[CONF_TEMPLATE] if r.get(CONF_TEMPLATE) else str(len(r.get(CONF_ROWS, []))) + ' wierszy'})"
             for i, r in enumerate(reports, start=1)
         )
 
@@ -462,10 +503,7 @@ class HAMailerOptionsFlow(OptionsFlow):
         details = ""
         if user_input is not None:
             report, entities = _report_from_form(user_input)
-            if not entities:
-                errors[CONF_ENTITIES] = "no_entities"
-            else:
-                errors, details = _validate_report(report)
+            errors, details = await _check_report(self.hass, report, entities)
             if not errors:
                 ids = [r[CONF_ID] for r in self._opts[CONF_REPORTS]]
                 report[CONF_ID] = _make_id(report[CONF_NAME], ids)
@@ -513,7 +551,12 @@ class HAMailerOptionsFlow(OptionsFlow):
             menu_options=["report_settings", "rows_visual", "layout_text", "report_back", "save"],
             description_placeholders={
                 "name": r[CONF_NAME],
-                "info": f"`{r[CONF_CRON]}` → {r[CONF_RECIPIENT]}, {len(r[CONF_ROWS])} wierszy",
+                "info": f"`{r[CONF_CRON]}` → {r[CONF_RECIPIENT]}, "
+                + (
+                    f"szablon `{r[CONF_TEMPLATE]}` (kolumny i wiersze są wtedy ignorowane)"
+                    if r.get(CONF_TEMPLATE)
+                    else f"{len(r.get(CONF_ROWS, []))} wierszy"
+                ),
                 "warning": self._take_warning(),
             },
         )
@@ -527,9 +570,11 @@ class HAMailerOptionsFlow(OptionsFlow):
         report = self._report()
         if user_input is not None:
             user_input = _normalize(user_input)
-            candidate = {k: v for k, v in report.items() if k not in (CONF_CC, CONF_BCC, CONF_BODY)}
+            candidate = {
+                k: v for k, v in report.items() if k not in (CONF_CC, CONF_BCC, CONF_BODY, CONF_TEMPLATE)
+            }
             candidate.update(user_input)
-            errors, details = _validate_report(candidate)
+            errors, details = await _check_report(self.hass, candidate)
             if not errors:
                 report.clear()
                 report.update(candidate)
@@ -718,7 +763,7 @@ class HAMailerOptionsFlow(OptionsFlow):
         details = ""
         report = self._report()
         text = yaml.safe_dump(
-            {CONF_COLUMNS: report.get(CONF_COLUMNS, DEFAULT_COLUMNS), CONF_ROWS: report[CONF_ROWS]},
+            {CONF_COLUMNS: report.get(CONF_COLUMNS, DEFAULT_COLUMNS), CONF_ROWS: report.get(CONF_ROWS, [])},
             allow_unicode=True,
             sort_keys=False,
         )
