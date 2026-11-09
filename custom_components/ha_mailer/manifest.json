@@ -4,8 +4,8 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["persistent_notification"],
-  "documentation": "https://github.com/TWOJ_LOGIN/ha-mailer",
-  "issue_tracker": "https://github.com/TWOJ_LOGIN/ha-mailer/issues",
+  "documentation": "https://github.com/pawel3410/HA-mailer",
+  "issue_tracker": "https://github.com/pawel3410/HA-mailer/issues",
   "iot_class": "calculated",
   "requirements": ["openpyxl>=3.1.2", "croniter>=2.0.0"],
   "version": "2.1.1"
