@@ -20,7 +20,7 @@ from io import BytesIO
 
 import voluptuous as vol
 from croniter import croniter
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.properties import PageSetupProperties
@@ -55,6 +55,7 @@ CONF_CC = "cc"
 CONF_BCC = "bcc"
 CONF_SUBJECT = "subject"
 CONF_BODY = "body"
+CONF_TEMPLATE = "template"
 CONF_COLUMNS = "columns"
 CONF_ROWS = "rows"
 CONF_REPORTS = "reports"
@@ -96,6 +97,11 @@ DT_FMT = "%Y-%m-%d %H:%M:%S"
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 FIRST_DATA_ROW = 5  # wiersz 1: tytuł, 2: czas migawki, 4: nagłówki, dane od wiersza 5
 WARN_STATES = {"unavailable", "unknown"}
+TOKEN_RE = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
+ENTITY_TOKEN_RE = re.compile(
+    r"^([a-z0-9_]+\.[a-z0-9_]+)(?:\.([A-Za-z0-9_]+))?(?:#(nazwa|jednostka|zmiana))?$"
+)
+SPECIAL_TOKENS = {"raport", "data", "czas", "data_czas", "ostrzezenia"}
 FILE_RE = re.compile(r"^HA_mailer_[a-z0-9_]+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.xlsx$")
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -111,6 +117,8 @@ DEFAULT_STATS = {
     "last_error": None,
     "last_error_time": None,
     "last_file_kb": None,
+    "last_entities": None,  # liczba encji w ostatnim pliku (ważne przy szablonie)
+    "last_warnings": None,  # liczba encji niedostępnych lub brakujących w ostatnim pliku
 }
 
 
@@ -186,9 +194,24 @@ def count_sheets(rows: list[dict]) -> int:
 
 
 def _check_layout(conf: dict) -> dict:
+    if conf.get(CONF_TEMPLATE):  # przy szablonie wiersze i kolumny nie są używane
+        return conf
     if any(is_text_row(r) for r in conf[CONF_ROWS]) and "opis" not in conf[CONF_COLUMNS]:
         raise vol.Invalid(ERR_OPIS)
     return conf
+
+
+def _rows_or_template(conf: dict) -> dict:
+    if not conf.get(CONF_TEMPLATE) and not conf.get(CONF_ROWS):
+        raise vol.Invalid("Raport wymaga wierszy (rows) albo szablonu (template).")
+    return conf
+
+
+def _template_path(value):
+    value = str(value).strip()
+    if not value.lower().endswith(".xlsx"):
+        raise vol.Invalid("Szablon musi być plikiem .xlsx.")
+    return value
 
 
 def _set_report_id(report: dict) -> dict:
@@ -246,10 +269,12 @@ REPORT_SCHEMA = vol.All(
             vol.Optional(CONF_BCC): _recipients_opt,
             vol.Optional(CONF_SUBJECT, default=DEFAULT_SUBJECT): cv.string,
             vol.Optional(CONF_BODY): cv.string,
+            vol.Optional(CONF_TEMPLATE): _template_path,
             vol.Optional(CONF_COLUMNS, default=DEFAULT_COLUMNS): COLUMNS_SCHEMA,
-            vol.Required(CONF_ROWS): ROWS_SCHEMA,
+            vol.Optional(CONF_ROWS): ROWS_SCHEMA,
         }
     ),
+    _rows_or_template,
     _check_layout,
     _set_report_id,
 )
@@ -417,6 +442,87 @@ def _build_xlsx(report_name: str, columns: list[str], rows: list[dict], snapshot
         ws.title = _sheet_title(title or DEFAULT_SHEET, used)
         heading = report_name if title is None else f"{report_name} - {title}"
         _fill_sheet(ws, heading, columns, sheet_rows, snapshot)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------ szablon Excel ---
+def parse_token(token: str) -> dict | None:
+    """Rozpoznaje znacznik z szablonu (zawartość między {{ i }}).
+
+    Formy: `raport`, `data`, `czas`, `data_czas`, `ostrzezenia`, `domena.encja`,
+    `domena.encja.atrybut`, z opcjonalnym przyrostkiem `#nazwa`, `#jednostka`, `#zmiana`.
+    """
+    token = token.strip()
+    if token in SPECIAL_TOKENS:
+        return {"kind": "special", "name": token}
+    match = ENTITY_TOKEN_RE.match(token)
+    if match:
+        return {"kind": "entity", "entity": match[1], "attr": match[2], "mod": match[3]}
+    return None
+
+
+def _template_cells(wb):
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                value = cell.value
+                # komórki z formułami pomijamy: znaczniki działają tylko w komórkach tekstowych
+                if isinstance(value, str) and "{{" in value and not value.startswith("="):
+                    yield cell, value
+
+
+def scan_template(path: str):
+    """Wczytuje szablon i zwraca (skoroszyt, unikalne znaczniki w kolejności występowania)."""
+    wb = load_workbook(path)
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for _, value in _template_cells(wb):
+        for token in TOKEN_RE.findall(value):
+            if token not in seen:
+                seen.add(token)
+                tokens.append(token)
+    return wb, tokens
+
+
+def _as_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime(DT_FMT)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _set_cell(cell, value, warn: bool) -> None:
+    cell.value = value
+    if isinstance(value, str):
+        cell.data_type = "s"  # tekst z encji nigdy nie jest traktowany jak formuła
+    if isinstance(value, datetime) and cell.number_format == "General":
+        cell.number_format = _DT_FORMAT
+    if warn:
+        font = cell.font
+        cell.fill = _WARN_FILL
+        cell.font = Font(name=font.name, size=font.size, italic=font.italic, bold=True, color="9C0006")
+
+
+def fill_template(wb, resolved: dict[str, dict]) -> bytes:
+    """Podstawia wartości w miejsce znaczników, zachowując formatowanie szablonu.
+
+    Komórka zawierająca wyłącznie znacznik dostaje wartość typowaną (liczba, data), a znacznik
+    wewnątrz tekstu jest podmieniany na tekst. Nieznane znaczniki zostają bez zmian.
+    """
+    for cell, value in _template_cells(wb):
+        whole = TOKEN_RE.fullmatch(value.strip())
+        if whole and whole[1] in resolved:
+            info = resolved[whole[1]]
+            _set_cell(cell, info["value"], info["warn"])
+        else:
+            cell.value = TOKEN_RE.sub(
+                lambda m: _as_text(resolved[m[1]]["value"]) if m[1] in resolved else m[0], value
+            )
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -679,7 +785,7 @@ class HAMailer:
     def _collect_rows(self, report: dict) -> list[dict]:
         """Kolejność = kolejność wierszy w konfiguracji raportu (nigdy się nie zmienia)."""
         out: list[dict] = []
-        for row in report[CONF_ROWS]:
+        for row in report.get(CONF_ROWS, []):
             if row.get(ROW_SHEET):
                 out.append({"kind": "sheet", "values": {"name": row[ROW_SHEET]}, "warn": False})
                 continue
@@ -715,13 +821,81 @@ class HAMailer:
         return out
 
     # ---- tworzenie plików
+    def _resolve_entity(self, info: dict) -> dict:
+        """Wartość znacznika encji: {"value": ..., "warn": ...}."""
+        eid, attr, mod = info["entity"], info["attr"], info["mod"]
+        state = self.hass.states.get(eid)
+        if state is None:
+            value = {"nazwa": eid, "jednostka": "", "zmiana": ""}.get(mod, "brak encji")
+            return {"value": value, "warn": True}
+        if mod == "nazwa":
+            return {"value": state.name, "warn": False}
+        if mod == "jednostka":
+            return {"value": state.attributes.get("unit_of_measurement", ""), "warn": False}
+        if mod == "zmiana":
+            changed = dt_util.as_local(state.last_changed).replace(tzinfo=None, microsecond=0)
+            return {"value": changed, "warn": False}
+        if attr:
+            if attr in state.attributes:
+                return {"value": _attr_value(state.attributes[attr]), "warn": state.state in WARN_STATES}
+            return {"value": "brak atrybutu", "warn": True}
+        return {"value": _to_value(state.state), "warn": state.state in WARN_STATES}
+
+    async def _build_from_template(self, report: dict, now: datetime) -> tuple[bytes, int, int]:
+        """Wypełnij szablon .xlsx wartościami encji. Zwraca (plik, liczba_encji, ostrzeżenia)."""
+        path = self.hass.config.path(report[CONF_TEMPLATE])
+        wb, tokens = await self.hass.async_add_executor_job(scan_template, path)
+        resolved: dict[str, dict] = {}
+        entity_ids: set[str] = set()
+        problems: set[tuple[str, str | None]] = set()
+        for token in tokens:
+            info = parse_token(token)
+            if info and info["kind"] == "entity":
+                resolved[token] = self._resolve_entity(info)
+                entity_ids.add(info["entity"])
+                if resolved[token]["warn"]:
+                    problems.add((info["entity"], info["attr"]))
+        stamp = now.replace(tzinfo=None, microsecond=0)
+        specials = {
+            "raport": report[CONF_NAME],
+            "data": stamp.strftime("%Y-%m-%d"),
+            "czas": stamp.strftime("%H:%M:%S"),
+            "data_czas": stamp,
+            "ostrzezenia": len(problems),
+        }
+        for token in tokens:
+            info = parse_token(token)
+            if info and info["kind"] == "special":
+                resolved[token] = {"value": specials[info["name"]], "warn": False}
+            elif info is None:
+                _LOGGER.warning("HA_mailer [%s]: nieznany znacznik {{%s}} w szablonie", report[CONF_NAME], token)
+        payload = await self.hass.async_add_executor_job(fill_template, wb, resolved)
+        return payload, len(entity_ids), len(problems)
+
     async def _create_item(self, rid: str) -> tuple[dict, bytes]:
         """Zbuduj plik z aktualnych stanów i zapisz go w folderze (lub w pamięci przy awarii dysku)."""
         report = self.reports[rid]
         now = dt_util.now()
-        rows = self._collect_rows(report)
-        name = f"HA_mailer_{rid}_{now.strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
         folder = self.folder
+        try:
+            if report.get(CONF_TEMPLATE):
+                payload, entities, warnings = await self._build_from_template(report, now)
+            else:
+                rows = self._collect_rows(report)
+                payload = await self.hass.async_add_executor_job(
+                    _build_xlsx,
+                    report[CONF_NAME],
+                    list(report[CONF_COLUMNS]),
+                    rows,
+                    now.replace(tzinfo=None, microsecond=0),
+                )
+                entities = sum(1 for r in rows if r["kind"] == "entity")
+                warnings = sum(1 for r in rows if r["warn"])
+        except Exception as err:  # noqa: BLE001
+            error = f"Nie można utworzyć pliku raportu: {err}"
+            await self._record(rid, now, error)
+            raise HomeAssistantError(f"HA_mailer: {error}") from err
+        name = f"HA_mailer_{rid}_{now.strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
         item = {
             "id": uuid.uuid4().hex,
             "report": rid,
@@ -730,24 +904,14 @@ class HAMailer:
             "stored": False,
             "subject": f"{report[CONF_SUBJECT]} {now.strftime(DT_FMT)}",
             "created": now.isoformat(),
-            "entities": sum(1 for r in rows if r["kind"] == "entity"),
-            "warnings": sum(1 for r in rows if r["warn"]),
+            "entities": entities,
+            "warnings": warnings,
             "attempts": 0,
             "last_error": None,
             "next_try": None,
         }
-        try:
-            payload = await self.hass.async_add_executor_job(
-                _build_xlsx,
-                report[CONF_NAME],
-                list(report[CONF_COLUMNS]),
-                rows,
-                now.replace(tzinfo=None, microsecond=0),
-            )
-        except Exception as err:  # noqa: BLE001
-            error = f"Nie można utworzyć pliku raportu: {err}"
-            await self._record(rid, now, error)
-            raise HomeAssistantError(f"HA_mailer: {error}") from err
+        st = self.stats.setdefault(rid, dict(DEFAULT_STATS))
+        st["last_entities"], st["last_warnings"] = entities, warnings
         try:
             await self.hass.async_add_executor_job(_write_file, folder, name, payload)
         except OSError as err:
