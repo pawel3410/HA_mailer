@@ -137,7 +137,9 @@ Zasady:
 - Wspierane są tylko pliki `.xlsx`. Szablon nie powinien zawierać makr, wykresów, obrazów ani tabel przestawnych, bo biblioteka używana do zapisu może ich nie zachować.
 - Przy zapisie konfiguracji w interfejsie sprawdzane jest, czy plik istnieje i da się go wczytać. Jeśli szablon zniknie później, wysyłka kończy się jawnym błędem (log, powiadomienie, Naprawy, status), a pozostałe raporty działają dalej.
 
-Przykład szablonu (komórki A1:D5):
+**Gotowy przykład** to plik `examples/szablon_przyklad.xlsx` w repozytorium: sformatowany raport dzienny z temperaturami, wilgotnością, baterią czujników, podsumowaniem (formuły średniej, minimum i maksimum) oraz sekcją energii. Skopiuj go do `/config/HA_mailer_templates/`, zamień przykładowe identyfikatory encji (np. `sensor.salon_temperatura`) na własne i wpisz w raporcie `template: HA_mailer_templates/szablon_przyklad.xlsx`. Komentarz w komórce A1 przypomina o dostosowaniu go, a potem możesz go usunąć.
+
+Skrócony przykład układu:
 
 | | A | B | C | D |
 |---|---|---|---|---|
@@ -319,6 +321,7 @@ Wpisy z wersji 1.x i 2.0 są migrowane automatycznie (dotychczasowa konfiguracja
 ```
 hacs.json
 README.md
+examples/szablon_przyklad.xlsx   # przykładowy szablon Excel
 custom_components/ha_mailer/
 ├── __init__.py        # logika: raporty, harmonogramy, Excel, kolejka, archiwum, import YAML
 ├── config_flow.py     # konfiguracja, opcje, edytor graficzny i tekstowy
