@@ -523,6 +523,7 @@ def fill_template(wb, resolved: dict[str, dict]) -> bytes:
             cell.value = TOKEN_RE.sub(
                 lambda m: _as_text(resolved[m[1]]["value"]) if m[1] in resolved else m[0], value
             )
+    wb.calculation.fullCalcOnLoad = True  # Excel przeliczy formuły szablonu po otwarciu pliku
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
