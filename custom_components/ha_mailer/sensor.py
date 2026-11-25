@@ -128,6 +128,7 @@ class StatsSensor(_Base):
             "szablon": report.get(CONF_TEMPLATE),
             "liczba_encji": s["last_entities"] if templated else sum(1 for r in rows if r.get(ROW_ENTITY)),
             "ostrzezenia_w_ostatnim_pliku": s["last_warnings"],
+            "informacje_w_ostatnim_pliku": s["last_infos"],
             "liczba_wierszy": None if templated else len(rows),
             "liczba_arkuszy": None if templated else count_sheets(rows),
         }
