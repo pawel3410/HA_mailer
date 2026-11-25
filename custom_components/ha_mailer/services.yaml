@@ -1,22 +1,21 @@
 send_now:
   fields:
-    entry_id:
+    config:
       required: false
       selector:
-        config_entry:
-          integration: ha_mailer
+        text:
     report:
       required: false
       selector:
         text:
 clear_pending:
   fields:
-    entry_id:
+    config:
       required: false
       selector:
-        config_entry:
-          integration: ha_mailer
+        text:
     report:
       required: false
       selector:
         text:
+reload: {}
