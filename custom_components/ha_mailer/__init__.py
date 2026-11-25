@@ -19,6 +19,7 @@ from functools import partial
 from io import BytesIO
 
 import voluptuous as vol
+import yaml
 from croniter import croniter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -28,7 +29,7 @@ from openpyxl.worksheet.properties import PageSetupProperties
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_NAME
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -37,6 +38,8 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
+from homeassistant.helpers.reload import async_integration_yaml_config
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util, slugify
 
@@ -46,7 +49,6 @@ DOMAIN = "ha_mailer"
 PLATFORMS = ["sensor", "switch"]
 
 CONF_ID = "id"
-CONF_ENTITIES = "entities"  # tylko w kroku początkowym UI (zamieniane na wiersze)
 CONF_CRON = "cron"
 CONF_GMAIL_USER = "gmail_user"
 CONF_GMAIL_PASSWORD = "gmail_app_password"
@@ -56,6 +58,8 @@ CONF_BCC = "bcc"
 CONF_SUBJECT = "subject"
 CONF_BODY = "body"
 CONF_TEMPLATE = "template"
+CONF_LANGUAGE = "language"
+CONF_NO_VALUE = "no_value"
 CONF_COLUMNS = "columns"
 CONF_ROWS = "rows"
 CONF_REPORTS = "reports"
@@ -81,14 +85,16 @@ COLUMN_LABELS = {
     "zmiana": "Ostatnia zmiana",
 }
 DEFAULT_COLUMNS = ["lp", "opis", "encja", "nazwa", "wartosc", "jednostka", "zmiana"]
-LEGACY_COLUMNS = ["lp", "encja", "nazwa", "wartosc", "jednostka", "zmiana"]  # układ z wersji 1.1
 
 DEFAULT_CRON = "0 8 * * *"
 DEFAULT_SUBJECT = "HA_mailer - raport"
 DEFAULT_RETRY = 10
 DEFAULT_RETENTION = 30
 DEFAULT_FOLDER = "HA_mailer_reports"  # względem katalogu z configuration.yaml
-DEFAULT_SHEET = "Migawka"
+DEFAULT_LANGUAGE = "pl"
+DEFAULT_NO_VALUE = "warning"
+LANGUAGES = ("pl", "en")
+NO_VALUE_MODES = ("warning", "info", "ignore")
 GMAIL_HOST = "smtp.gmail.com"
 GMAIL_PORT = 465
 
@@ -96,12 +102,13 @@ SIGNAL = DOMAIN + "_update_{}"
 DT_FMT = "%Y-%m-%d %H:%M:%S"
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 FIRST_DATA_ROW = 5  # wiersz 1: tytuł, 2: czas migawki, 4: nagłówki, dane od wiersza 5
-WARN_STATES = {"unavailable", "unknown"}
+EMPTY_VALUES = {"", "unavailable", "unknown", "none"}  # stany oznaczające brak wartości
 TOKEN_RE = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
 ENTITY_TOKEN_RE = re.compile(
-    r"^([a-z0-9_]+\.[a-z0-9_]+)(?:\.([A-Za-z0-9_]+))?(?:#(nazwa|jednostka|zmiana))?$"
+    r"^([a-z0-9_]+\.[a-z0-9_]+)(?:\.([A-Za-z0-9_]+))?(?:#(nazwa|jednostka|zmiana))?"
+    r"(?:#no_value:\s*(warning|info|ignore))?$"
 )
-SPECIAL_TOKENS = {"raport", "data", "czas", "data_czas", "ostrzezenia"}
+SPECIAL_TOKENS = {"raport", "data", "czas", "data_czas", "ostrzezenia", "informacje"}
 FILE_RE = re.compile(r"^HA_mailer_[a-z0-9_]+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.xlsx$")
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -118,7 +125,8 @@ DEFAULT_STATS = {
     "last_error_time": None,
     "last_file_kb": None,
     "last_entities": None,  # liczba encji w ostatnim pliku (ważne przy szablonie)
-    "last_warnings": None,  # liczba encji niedostępnych lub brakujących w ostatnim pliku
+    "last_warnings": None,  # liczba encji bez wartości w trybie "warning" w ostatnim pliku
+    "last_infos": None,  # liczba encji bez wartości w trybie "info" w ostatnim pliku
 }
 
 
@@ -207,6 +215,20 @@ def _rows_or_template(conf: dict) -> dict:
     return conf
 
 
+def _language(value):
+    value = str(value).strip().lower()
+    if value not in LANGUAGES:
+        raise vol.Invalid(f"Język musi być jednym z: {', '.join(LANGUAGES)}.")
+    return value
+
+
+def _no_value_mode(value):
+    value = str(value).strip().lower()
+    if value not in NO_VALUE_MODES:
+        raise vol.Invalid(f"no_value musi być jednym z: {', '.join(NO_VALUE_MODES)}.")
+    return value
+
+
 def _template_path(value):
     value = str(value).strip()
     if not value.lower().endswith(".xlsx"):
@@ -252,10 +274,6 @@ ROW_SCHEMA = vol.All(
 )
 COLUMNS_SCHEMA = vol.All(cv.ensure_list, [vol.In(list(COLUMN_LABELS))], vol.Length(min=1), _unique)
 ROWS_SCHEMA = vol.All(cv.ensure_list, [ROW_SCHEMA], vol.Length(min=1))
-LAYOUT_SCHEMA = vol.All(
-    vol.Schema({vol.Required(CONF_COLUMNS): COLUMNS_SCHEMA, vol.Required(CONF_ROWS): ROWS_SCHEMA}),
-    _check_layout,
-)
 # UWAGA: nowe klucze (cc, bcc, body) są opcjonalne i bez wartości domyślnych,
 # żeby niezmieniony YAML dawał ten sam skrót i nie nadpisywał wpisu.
 REPORT_SCHEMA = vol.All(
@@ -270,6 +288,8 @@ REPORT_SCHEMA = vol.All(
             vol.Optional(CONF_SUBJECT, default=DEFAULT_SUBJECT): cv.string,
             vol.Optional(CONF_BODY): cv.string,
             vol.Optional(CONF_TEMPLATE): _template_path,
+            vol.Optional(CONF_LANGUAGE): _language,
+            vol.Optional(CONF_NO_VALUE): _no_value_mode,
             vol.Optional(CONF_COLUMNS, default=DEFAULT_COLUMNS): COLUMNS_SCHEMA,
             vol.Optional(CONF_ROWS): ROWS_SCHEMA,
         }
@@ -292,24 +312,24 @@ YAML_SCHEMA = vol.All(
                 vol.Coerce(int), vol.Range(min=0, max=3650)
             ),
             vol.Optional(CONF_STORAGE_PATH): cv.string,
+            vol.Optional(CONF_LANGUAGE): _language,
+            vol.Optional(CONF_NO_VALUE): _no_value_mode,
             vol.Required(CONF_REPORTS): vol.All(
                 cv.ensure_list, [REPORT_SCHEMA], vol.Length(min=1), _unique_report_ids
             ),
         }
     ),
 )
+def _unique_block_ids(blocks: list[dict]) -> list[dict]:
+    explicit = [b[CONF_ID] for b in blocks if CONF_ID in b]
+    if len(set(explicit)) != len(explicit):
+        raise vol.Invalid("Bloki ha_mailer nie mogą mieć powtórzonego id.")
+    return blocks
+
+
 CONFIG_SCHEMA = vol.Schema(
-    {DOMAIN: vol.All(cv.ensure_list, [YAML_SCHEMA])}, extra=vol.ALLOW_EXTRA
+    {DOMAIN: vol.All(cv.ensure_list, [YAML_SCHEMA], _unique_block_ids)}, extra=vol.ALLOW_EXTRA
 )
-
-
-def layout_error(columns, rows) -> str | None:
-    """Zwraca opis błędu układu lub None, gdy układ jest poprawny."""
-    try:
-        LAYOUT_SCHEMA({CONF_COLUMNS: columns, CONF_ROWS: rows})
-    except vol.Invalid as err:
-        return str(err)
-    return None
 
 
 def yaml_digest(conf: dict) -> str:
@@ -325,12 +345,55 @@ def _to_value(raw):
     return number if math.isfinite(number) else raw
 
 
-def _attr_value(raw):
-    """Wartość atrybutu -> typ możliwy do zapisania w komórce."""
+I18N = {
+    "pl": {
+        "cols": {
+            "lp": "Lp.", "opis": "Opis", "encja": "Encja", "atrybut": "Atrybut", "nazwa": "Nazwa",
+            "wartosc": "Wartość", "jednostka": "Jednostka", "zmiana": "Ostatnia zmiana",
+        },
+        "snapshot": "Czas migawki",
+        "warn_note": "Encje niedostępne lub brakujące",
+        "info_note": "Encje bez wartości",
+        "sheet": "Migawka",
+        "no_data": "brak danych", "no_entity": "brak encji", "no_attr": "brak atrybutu",
+        "yes": "tak", "no": "nie",
+        "body": "Raport „{name}” z {created}. W załączniku wartości {n} encji.",
+        "body_warn": "Uwaga: encje niedostępne lub brakujące: {n} (zaznaczone w pliku).",
+        "body_info": "Informacja: encje bez wartości: {n}.",
+        "delay": "Wysyłka była opóźniona (nieudane próby: {attempts}), ponowiona {time}. "
+        "Plik zawiera stan z chwili utworzenia raportu.",
+    },
+    "en": {
+        "cols": {
+            "lp": "No.", "opis": "Description", "encja": "Entity", "atrybut": "Attribute", "nazwa": "Name",
+            "wartosc": "Value", "jednostka": "Unit", "zmiana": "Last changed",
+        },
+        "snapshot": "Snapshot time",
+        "warn_note": "Unavailable or missing entities",
+        "info_note": "Entities without a value",
+        "sheet": "Snapshot",
+        "no_data": "no data", "no_entity": "no entity", "no_attr": "no attribute",
+        "yes": "yes", "no": "no",
+        "body": "Report “{name}” from {created}. The attachment contains the values of {n} entities.",
+        "body_warn": "Warning: unavailable or missing entities: {n} (highlighted in the file).",
+        "body_info": "Note: entities without a value: {n}.",
+        "delay": "Delivery was delayed (failed attempts: {attempts}), retried at {time}. "
+        "The file contains the state at the time the report was created.",
+    },
+}
+
+
+def is_empty(raw) -> bool:
+    """Brak wartości: None, pusty lub złożony ze spacji tekst oraz unavailable / unknown / none."""
     if raw is None:
-        return ""
+        return True
+    return isinstance(raw, str) and raw.strip().lower() in EMPTY_VALUES
+
+
+def _attr_value(raw, lang: str = DEFAULT_LANGUAGE):
+    """Wartość atrybutu -> typ możliwy do zapisania w komórce."""
     if isinstance(raw, bool):
-        return "tak" if raw else "nie"
+        return I18N[lang]["yes"] if raw else I18N[lang]["no"]
     if isinstance(raw, (int, float)):
         return raw if math.isfinite(raw) else str(raw)
     if isinstance(raw, str):
@@ -344,8 +407,20 @@ _HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 _TEXT_FILL = PatternFill("solid", fgColor="D9E1F2")
 _BAND_FILL = PatternFill("solid", fgColor="F2F2F2")
 _WARN_FILL = PatternFill("solid", fgColor="FFC7CE")
+_INFO_FILL = PatternFill("solid", fgColor="EDEDED")
 _ALIGN = {"lp": "center", "wartosc": "right", "jednostka": "center", "zmiana": "center"}
 _DT_FORMAT = "yyyy-mm-dd hh:mm:ss"
+
+
+def _mark(cell, mode: str) -> None:
+    """Oznacz komórkę bez wartości zgodnie z trybem `no_value` (z zachowaniem czcionki komórki)."""
+    font = cell.font
+    if mode == "warning":
+        cell.fill = _WARN_FILL
+        cell.font = Font(name=font.name, size=font.size, italic=font.italic, bold=True, color="9C0006")
+    elif mode == "info":
+        cell.fill = _INFO_FILL
+        cell.font = Font(name=font.name, size=font.size, italic=True, bold=font.bold, color="7F7F7F")
 
 
 def _sheet_title(title: str, used: set[str]) -> str:
@@ -358,24 +433,28 @@ def _sheet_title(title: str, used: set[str]) -> str:
     return name
 
 
-def _fill_sheet(ws, heading: str, columns, rows, snapshot: datetime) -> None:
-    warns = sum(1 for r in rows if r["warn"])
+def _fill_sheet(ws, heading: str, columns, rows, snapshot: datetime, lang: str, mode: str) -> None:
+    labels = I18N[lang]
+    missing = sum(1 for r in rows if r["novalue"])
     ws["A1"] = heading
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
-    note = f"Czas migawki: {snapshot.strftime(DT_FMT)}"
-    if warns:
-        note += f"   |   Encje niedostępne lub brakujące: {warns}"
+    note = f"{labels['snapshot']}: {snapshot.strftime(DT_FMT)}"
+    if missing and mode == "warning":
+        note += f"   |   {labels['warn_note']}: {missing}"
+    elif missing and mode == "info":
+        note += f"   |   {labels['info_note']}: {missing}"
     ws["A2"] = note
     ws["A2"].font = Font(italic=True, color="595959")
 
     widths = []
     for col, key in enumerate(columns, start=1):
-        cell = ws.cell(row=FIRST_DATA_ROW - 1, column=col, value=COLUMN_LABELS[key])
+        text = labels["cols"][key]
+        cell = ws.cell(row=FIRST_DATA_ROW - 1, column=col, value=text)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = _HEADER_FILL
         cell.border = _BORDER
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        widths.append(len(COLUMN_LABELS[key]))
+        widths.append(len(text))
 
     number = band = 0
     for i, row in enumerate(rows):
@@ -401,9 +480,8 @@ def _fill_sheet(ws, heading: str, columns, rows, snapshot: datetime) -> None:
                 continue
             if band % 2 == 0:
                 cell.fill = _BAND_FILL
-            if row["warn"] and key == "wartosc":
-                cell.fill = _WARN_FILL
-                cell.font = Font(bold=True, color="9C0006")
+            if row["novalue"] and key == "wartosc":
+                _mark(cell, mode)
             if value is not None:
                 widths[col - 1] = max(widths[col - 1], len(str(value)))
     for col, width in enumerate(widths, start=1):
@@ -417,10 +495,18 @@ def _fill_sheet(ws, heading: str, columns, rows, snapshot: datetime) -> None:
     ws.print_title_rows = f"{FIRST_DATA_ROW - 1}:{FIRST_DATA_ROW - 1}"
 
 
-def _build_xlsx(report_name: str, columns: list[str], rows: list[dict], snapshot: datetime) -> bytes:
+def _build_xlsx(
+    report_name: str,
+    columns: list[str],
+    rows: list[dict],
+    snapshot: datetime,
+    lang: str = DEFAULT_LANGUAGE,
+    mode: str = DEFAULT_NO_VALUE,
+) -> bytes:
     """Układ stały: wiersz N arkusza = N-ty wiersz raportu, kolumny wg `columns`.
 
     Wiersz z kluczem `sheet` rozpoczyna nowy arkusz (numeracja Lp. liczona od nowa).
+    Teksty generowane przez dodatek są w języku `lang`, a brak wartości oznaczany wg `mode`.
     """
     sheets: list[tuple[str | None, list[dict]]] = []
     for row in rows:
@@ -439,9 +525,9 @@ def _build_xlsx(report_name: str, columns: list[str], rows: list[dict], snapshot
     used: set[str] = set()
     for idx, (title, sheet_rows) in enumerate(sheets):
         ws = wb.active if idx == 0 else wb.create_sheet()
-        ws.title = _sheet_title(title or DEFAULT_SHEET, used)
+        ws.title = _sheet_title(title or I18N[lang]["sheet"], used)
         heading = report_name if title is None else f"{report_name} - {title}"
-        _fill_sheet(ws, heading, columns, sheet_rows, snapshot)
+        _fill_sheet(ws, heading, columns, sheet_rows, snapshot, lang, mode)
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -451,15 +537,22 @@ def _build_xlsx(report_name: str, columns: list[str], rows: list[dict], snapshot
 def parse_token(token: str) -> dict | None:
     """Rozpoznaje znacznik z szablonu (zawartość między {{ i }}).
 
-    Formy: `raport`, `data`, `czas`, `data_czas`, `ostrzezenia`, `domena.encja`,
-    `domena.encja.atrybut`, z opcjonalnym przyrostkiem `#nazwa`, `#jednostka`, `#zmiana`.
+    Formy: `raport`, `data`, `czas`, `data_czas`, `ostrzezenia`, `informacje`, `domena.encja`,
+    `domena.encja.atrybut`, z opcjonalnym przyrostkiem `#nazwa`, `#jednostka`, `#zmiana`
+    oraz `#no_value:warning|info|ignore` (tryb tylko dla tej komórki, nadpisuje `no_value` raportu).
     """
     token = token.strip()
     if token in SPECIAL_TOKENS:
         return {"kind": "special", "name": token}
     match = ENTITY_TOKEN_RE.match(token)
     if match:
-        return {"kind": "entity", "entity": match[1], "attr": match[2], "mod": match[3]}
+        return {
+            "kind": "entity",
+            "entity": match[1],
+            "attr": match[2],
+            "mod": match[3],
+            "mode": match[4],  # None = tryb raportu
+        }
     return None
 
 
@@ -496,29 +589,29 @@ def _as_text(value) -> str:
     return str(value)
 
 
-def _set_cell(cell, value, warn: bool) -> None:
+def _set_cell(cell, value, novalue: bool, mode: str) -> None:
     cell.value = value
     if isinstance(value, str):
         cell.data_type = "s"  # tekst z encji nigdy nie jest traktowany jak formuła
     if isinstance(value, datetime) and cell.number_format == "General":
         cell.number_format = _DT_FORMAT
-    if warn:
-        font = cell.font
-        cell.fill = _WARN_FILL
-        cell.font = Font(name=font.name, size=font.size, italic=font.italic, bold=True, color="9C0006")
+    if novalue:
+        _mark(cell, mode)
 
 
-def fill_template(wb, resolved: dict[str, dict]) -> bytes:
+def fill_template(wb, resolved: dict[str, dict], mode: str = DEFAULT_NO_VALUE) -> bytes:
     """Podstawia wartości w miejsce znaczników, zachowując formatowanie szablonu.
 
     Komórka zawierająca wyłącznie znacznik dostaje wartość typowaną (liczba, data), a znacznik
     wewnątrz tekstu jest podmieniany na tekst. Nieznane znaczniki zostają bez zmian.
+    Komórki bez wartości są oznaczane wg `mode` (warning, info, ignore), chyba że znacznik
+    ma własny przyrostek `#no_value:tryb`.
     """
     for cell, value in _template_cells(wb):
         whole = TOKEN_RE.fullmatch(value.strip())
         if whole and whole[1] in resolved:
             info = resolved[whole[1]]
-            _set_cell(cell, info["value"], info["warn"])
+            _set_cell(cell, info["value"], info["novalue"], info.get("mode") or mode)
         else:
             cell.value = TOKEN_RE.sub(
                 lambda m: _as_text(resolved[m[1]]["value"]) if m[1] in resolved else m[0], value
@@ -534,6 +627,15 @@ def _write_file(folder: str, name: str, payload: bytes) -> None:
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name), "wb") as fh:
         fh.write(payload)
+
+
+def _probe_dir(folder: str) -> None:
+    """Sprawdza, czy folder istnieje (lub da się go utworzyć) i czy można w nim zapisywać."""
+    os.makedirs(folder, exist_ok=True)
+    probe = os.path.join(folder, ".ha_mailer_test")
+    with open(probe, "w", encoding="utf-8") as fh:
+        fh.write("ok")
+    os.remove(probe)
 
 
 def _read_file(path: str) -> bytes:
@@ -675,6 +777,7 @@ class HAMailer:
             self.enabled[rid] = bool(saved.get("enabled", {}).get(rid, True))
         for gone in set(saved.get("stats", {})) - ids:  # raporty usunięte z konfiguracji
             self._clear_alerts(gone)
+            ir.async_delete_issue(self.hass, DOMAIN, f"template_problem_{self.entry.entry_id}_{gone}")
         self.pending = [i for i in saved.get("pending", []) if i["report"] in ids]
         self.dirs = list(saved.get("dirs", []))
 
@@ -705,6 +808,55 @@ class HAMailer:
             self.hass, self._cleanup, timedelta(hours=1)
         )
         self.hass.async_create_task(self._cleanup())
+        self.hass.async_create_task(self._startup_checks())
+
+    async def _template_problem(self, path: str) -> str | None:
+        """Opis problemu z szablonem albo None, gdy szablon jest w porządku."""
+        try:
+            _, tokens = await self.hass.async_add_executor_job(
+                scan_template, self.hass.config.path(path)
+            )
+        except FileNotFoundError:
+            return f"nie znaleziono pliku {path}"
+        except Exception as err:  # noqa: BLE001
+            return f"nie można wczytać pliku {path}: {err}"
+        unknown = [f"{{{{{t}}}}}" for t in tokens if parse_token(t) is None]
+        return f"nieznane znaczniki: {', '.join(unknown)}" if unknown else None
+
+    async def _startup_checks(self) -> None:
+        """Sprawdza folder i szablony po starcie lub przeładowaniu YAML (błędy trafiają do Napraw)."""
+        me = asyncio.current_task()
+        self._tasks.add(me)
+        try:
+            folder = self.folder
+            try:
+                await self.hass.async_add_executor_job(_probe_dir, folder)
+            except OSError as err:
+                self._storage_problem(folder, err)
+            else:
+                self._storage_ok()
+            for rid, report in self.reports.items():
+                issue_id = f"template_problem_{self.entry.entry_id}_{rid}"
+                template = report.get(CONF_TEMPLATE)
+                problem = await self._template_problem(template) if template else None
+                if problem:
+                    _LOGGER.error("HA_mailer [%s]: problem z szablonem: %s", report[CONF_NAME], problem)
+                    ir.async_create_issue(
+                        self.hass,
+                        DOMAIN,
+                        issue_id,
+                        is_fixable=False,
+                        severity=ir.IssueSeverity.ERROR,
+                        translation_key="template_problem",
+                        translation_placeholders={"report": report[CONF_NAME], "problem": problem},
+                    )
+                else:
+                    ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            await self._save()  # zapisz klucze raportów, by późniejsze usunięcie raportu posprzątało alerty
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Błąd kontroli startowych HA_mailer")
+        finally:
+            self._tasks.discard(me)
 
     def stop(self) -> None:
         """Synchronicznie: zatrzymaj timery i nie zakładaj nowych (idempotentne)."""
@@ -782,116 +934,150 @@ class HAMailer:
         self._retry_unsub = None
         self._kick_flush()
 
+    # ---- ustawienia języka i trybu braku wartości (raport nadpisuje blok)
+    def _lang(self, report: dict) -> str:
+        return report.get(CONF_LANGUAGE) or self.cfg.get(CONF_LANGUAGE) or DEFAULT_LANGUAGE
+
+    def _no_value_mode(self, report: dict) -> str:
+        return report.get(CONF_NO_VALUE) or self.cfg.get(CONF_NO_VALUE) or DEFAULT_NO_VALUE
+
     # ---- zbieranie danych do raportu
-    def _collect_rows(self, report: dict) -> list[dict]:
+    def _collect_rows(self, report: dict, lang: str = DEFAULT_LANGUAGE) -> list[dict]:
         """Kolejność = kolejność wierszy w konfiguracji raportu (nigdy się nie zmienia)."""
+        labels = I18N[lang]
         out: list[dict] = []
         for row in report.get(CONF_ROWS, []):
             if row.get(ROW_SHEET):
-                out.append({"kind": "sheet", "values": {"name": row[ROW_SHEET]}, "warn": False})
+                out.append({"kind": "sheet", "values": {"name": row[ROW_SHEET]}, "novalue": False})
                 continue
             desc = row.get(ROW_DESC) or None
             entity_id = row.get(ROW_ENTITY)
             if not entity_id:
-                out.append({"kind": "text", "values": {"opis": desc}, "warn": False})
+                out.append({"kind": "text", "values": {"opis": desc}, "novalue": False})
                 continue
             attr = row.get(ROW_ATTR)
             state = self.hass.states.get(entity_id)
             values = {"opis": desc, "encja": entity_id, "atrybut": attr}
             if state is None:
-                values.update(nazwa=entity_id, wartosc="brak encji", jednostka="")
-                warn = True
+                values.update(nazwa=entity_id, wartosc=labels["no_entity"], jednostka="")
+                novalue = True
             else:
                 values["nazwa"] = f"{state.name} - {attr}" if attr else state.name
                 values["zmiana"] = dt_util.as_local(state.last_changed).replace(
                     tzinfo=None, microsecond=0
                 )
-                warn = state.state in WARN_STATES
                 if attr:
-                    if attr in state.attributes:
-                        values.update(wartosc=_attr_value(state.attributes[attr]), jednostka="")
+                    values["jednostka"] = ""
+                    if attr not in state.attributes:
+                        values["wartosc"], novalue = labels["no_attr"], True
+                    elif is_empty(state.attributes[attr]):
+                        values["wartosc"], novalue = labels["no_data"], True
                     else:
-                        values.update(wartosc="brak atrybutu", jednostka="")
-                        warn = True
+                        values["wartosc"], novalue = _attr_value(state.attributes[attr], lang), False
                 else:
-                    values.update(
-                        wartosc=_to_value(state.state),
-                        jednostka=state.attributes.get("unit_of_measurement", ""),
-                    )
-            out.append({"kind": "entity", "values": values, "warn": warn})
+                    values["jednostka"] = state.attributes.get("unit_of_measurement", "")
+                    if is_empty(state.state):
+                        values["wartosc"], novalue = labels["no_data"], True
+                    else:
+                        values["wartosc"], novalue = _to_value(state.state), False
+            out.append({"kind": "entity", "values": values, "novalue": novalue})
         return out
 
     # ---- tworzenie plików
-    def _resolve_entity(self, info: dict) -> dict:
-        """Wartość znacznika encji: {"value": ..., "warn": ...}."""
+    def _resolve_entity(self, info: dict, lang: str = DEFAULT_LANGUAGE) -> dict:
+        """Wartość znacznika encji: {"value": ..., "novalue": ...}."""
+        labels = I18N[lang]
         eid, attr, mod = info["entity"], info["attr"], info["mod"]
         state = self.hass.states.get(eid)
         if state is None:
-            value = {"nazwa": eid, "jednostka": "", "zmiana": ""}.get(mod, "brak encji")
-            return {"value": value, "warn": True}
+            value = {"nazwa": eid, "jednostka": "", "zmiana": ""}.get(mod, labels["no_entity"])
+            return {"value": value, "novalue": True}
         if mod == "nazwa":
-            return {"value": state.name, "warn": False}
+            return {"value": state.name, "novalue": False}
         if mod == "jednostka":
-            return {"value": state.attributes.get("unit_of_measurement", ""), "warn": False}
+            return {"value": state.attributes.get("unit_of_measurement", ""), "novalue": False}
         if mod == "zmiana":
             changed = dt_util.as_local(state.last_changed).replace(tzinfo=None, microsecond=0)
-            return {"value": changed, "warn": False}
+            return {"value": changed, "novalue": False}
         if attr:
-            if attr in state.attributes:
-                return {"value": _attr_value(state.attributes[attr]), "warn": state.state in WARN_STATES}
-            return {"value": "brak atrybutu", "warn": True}
-        return {"value": _to_value(state.state), "warn": state.state in WARN_STATES}
+            if attr not in state.attributes:
+                return {"value": labels["no_attr"], "novalue": True}
+            raw = state.attributes[attr]
+            if is_empty(raw):
+                return {"value": labels["no_data"], "novalue": True}
+            return {"value": _attr_value(raw, lang), "novalue": False}
+        if is_empty(state.state):
+            return {"value": labels["no_data"], "novalue": True}
+        return {"value": _to_value(state.state), "novalue": False}
 
-    async def _build_from_template(self, report: dict, now: datetime) -> tuple[bytes, int, int]:
-        """Wypełnij szablon .xlsx wartościami encji. Zwraca (plik, liczba_encji, ostrzeżenia)."""
+    async def _build_from_template(
+        self, report: dict, now: datetime, lang: str, mode: str
+    ) -> tuple[bytes, int, int, int]:
+        """Wypełnij szablon .xlsx wartościami encji. Zwraca (plik, encje, ostrzeżenia, informacje).
+
+        Każdy znacznik może mieć własny tryb (`#no_value:...`). Encja bez wartości jest liczona
+        raz dla każdego trybu, w którym wystąpiła, a tryb `ignore` nie jest liczony wcale.
+        """
         path = self.hass.config.path(report[CONF_TEMPLATE])
         wb, tokens = await self.hass.async_add_executor_job(scan_template, path)
         resolved: dict[str, dict] = {}
         entity_ids: set[str] = set()
-        problems: set[tuple[str, str | None]] = set()
+        problems: set[tuple[str, str | None, str]] = set()
         for token in tokens:
             info = parse_token(token)
             if info and info["kind"] == "entity":
-                resolved[token] = self._resolve_entity(info)
+                effective = info["mode"] or mode
+                resolved[token] = {**self._resolve_entity(info, lang), "mode": effective}
                 entity_ids.add(info["entity"])
-                if resolved[token]["warn"]:
-                    problems.add((info["entity"], info["attr"]))
+                if resolved[token]["novalue"]:
+                    problems.add((info["entity"], info["attr"], effective))
+        warnings = sum(1 for p in problems if p[2] == "warning")
+        infos = sum(1 for p in problems if p[2] == "info")
         stamp = now.replace(tzinfo=None, microsecond=0)
         specials = {
             "raport": report[CONF_NAME],
             "data": stamp.strftime("%Y-%m-%d"),
             "czas": stamp.strftime("%H:%M:%S"),
             "data_czas": stamp,
-            "ostrzezenia": len(problems),
+            "ostrzezenia": warnings,
+            "informacje": infos,
         }
         for token in tokens:
             info = parse_token(token)
             if info and info["kind"] == "special":
-                resolved[token] = {"value": specials[info["name"]], "warn": False}
+                resolved[token] = {"value": specials[info["name"]], "novalue": False}
             elif info is None:
                 _LOGGER.warning("HA_mailer [%s]: nieznany znacznik {{%s}} w szablonie", report[CONF_NAME], token)
-        payload = await self.hass.async_add_executor_job(fill_template, wb, resolved)
-        return payload, len(entity_ids), len(problems)
+        payload = await self.hass.async_add_executor_job(fill_template, wb, resolved, mode)
+        return payload, len(entity_ids), warnings, infos
 
     async def _create_item(self, rid: str) -> tuple[dict, bytes]:
         """Zbuduj plik z aktualnych stanów i zapisz go w folderze (lub w pamięci przy awarii dysku)."""
         report = self.reports[rid]
         now = dt_util.now()
         folder = self.folder
+        lang, mode = self._lang(report), self._no_value_mode(report)
         try:
             if report.get(CONF_TEMPLATE):
-                payload, entities, warnings = await self._build_from_template(report, now)
+                payload, entities, warnings, infos = await self._build_from_template(
+                    report, now, lang, mode
+                )
             else:
-                rows = self._collect_rows(report)
+                rows = self._collect_rows(report, lang)
                 payload = await self.hass.async_add_executor_job(
                     _build_xlsx,
                     report[CONF_NAME],
                     list(report[CONF_COLUMNS]),
                     rows,
                     now.replace(tzinfo=None, microsecond=0),
+                    lang,
+                    mode,
                 )
                 entities = sum(1 for r in rows if r["kind"] == "entity")
-                warnings = sum(1 for r in rows if r["warn"])
+                missing = sum(1 for r in rows if r["novalue"])
+                # tryb "ignore" nie liczy brakujących wartości ani jako ostrzeżeń, ani jako informacji
+                warnings = missing if mode == "warning" else 0
+                infos = missing if mode == "info" else 0
         except Exception as err:  # noqa: BLE001
             error = f"Nie można utworzyć pliku raportu: {err}"
             await self._record(rid, now, error)
@@ -907,12 +1093,14 @@ class HAMailer:
             "created": now.isoformat(),
             "entities": entities,
             "warnings": warnings,
+            "infos": infos,
+            "language": lang,
             "attempts": 0,
             "last_error": None,
             "next_try": None,
         }
         st = self.stats.setdefault(rid, dict(DEFAULT_STATS))
-        st["last_entities"], st["last_warnings"] = entities, warnings
+        st["last_entities"], st["last_warnings"], st["last_infos"] = entities, warnings, infos
         try:
             await self.hass.async_add_executor_job(_write_file, folder, name, payload)
         except OSError as err:
@@ -947,9 +1135,9 @@ class HAMailer:
         )
 
     def _storage_ok(self) -> None:
-        if not self.folder_ok:
-            self.folder_ok = True
-            ir.async_delete_issue(self.hass, DOMAIN, f"storage_unavailable_{self.entry.entry_id}")
+        # bez warunku: po przeładowaniu nowa instancja nie wie o alercie utworzonym przez poprzednią
+        self.folder_ok = True
+        ir.async_delete_issue(self.hass, DOMAIN, f"storage_unavailable_{self.entry.entry_id}")
 
     def _clear_alerts(self, rid: str) -> None:
         persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_{self.entry.entry_id}_{rid}")
@@ -1009,6 +1197,8 @@ class HAMailer:
         created = _when(item["created"], dt_util.now())
         created_txt = dt_util.as_local(created).strftime(DT_FMT)
         warnings = int(item.get("warnings", 0))
+        infos = int(item.get("infos", 0))
+        labels = I18N[item.get("language") or self._lang(report)]
         custom = (report.get(CONF_BODY) or "").strip()
         if custom:
             body = (
@@ -1016,15 +1206,17 @@ class HAMailer:
                 .replace("[data]", created_txt)
                 .replace("[liczba_encji]", str(item["entities"]))
                 .replace("[ostrzezenia]", str(warnings))
+                .replace("[informacje]", str(infos))
             )
         else:
-            body = f"Raport „{report[CONF_NAME]}” z {created_txt}. W załączniku wartości {item['entities']} encji."
+            body = labels["body"].format(name=report[CONF_NAME], created=created_txt, n=item["entities"])
             if warnings:
-                body += f"\nUwaga: encje niedostępne lub brakujące: {warnings} (zaznaczone w pliku)."
+                body += "\n" + labels["body_warn"].format(n=warnings)
+            if infos:
+                body += "\n" + labels["body_info"].format(n=infos)
         if item["attempts"] > 0:
-            body += (
-                f"\n\nWysyłka była opóźniona (nieudane próby: {item['attempts']}), "
-                f"ponowiona {dt_util.now().strftime(DT_FMT)}. Plik zawiera stan z chwili utworzenia raportu."
+            body += "\n\n" + labels["delay"].format(
+                attempts=item["attempts"], time=dt_util.now().strftime(DT_FMT)
             )
         try:
             await self.hass.async_add_executor_job(
@@ -1177,73 +1369,109 @@ class HAMailer:
             self._tasks.discard(me)
 
 
+# ------------------------------------------------------ konfiguracja z YAML ---
+def _blocks(raw: list[dict]) -> list[dict]:
+    """Bloki `ha_mailer:` z nadanymi identyfikatorami (domyślnie numer bloku)."""
+    blocks = []
+    for idx, conf in enumerate(raw or []):
+        conf = json.loads(json.dumps(conf, default=str))  # typy JSON, jak w zapisie wpisu
+        conf.setdefault(CONF_ID, str(idx))
+        blocks.append(conf)
+    return blocks
+
+
+def _legacy_entry_yaml(entry: ConfigEntry) -> str | None:
+    """YAML odpowiadający wpisowi utworzonemu kiedyś w interfejsie (bez hasła)."""
+    cfg = {**entry.data, **entry.options}
+    if CONF_REPORTS not in cfg:
+        return None
+    block = {
+        CONF_GMAIL_USER: cfg.get(CONF_GMAIL_USER),
+        CONF_GMAIL_PASSWORD: "__SECRET__",
+        CONF_RETRY: cfg.get(CONF_RETRY, DEFAULT_RETRY),
+        CONF_RETENTION: cfg.get(CONF_RETENTION, DEFAULT_RETENTION),
+    }
+    if cfg.get(CONF_STORAGE_PATH):
+        block[CONF_STORAGE_PATH] = cfg[CONF_STORAGE_PATH]
+    block[CONF_REPORTS] = [
+        {k: v for k, v in report.items() if v not in (None, "", [])} for report in cfg[CONF_REPORTS]
+    ]
+    text = yaml.safe_dump({DOMAIN: block}, allow_unicode=True, sort_keys=False)
+    return text.replace("__SECRET__", "!secret ha_mailer_gmail_password")
+
+
+async def _sync_yaml(hass: HomeAssistant, blocks: list[dict]) -> None:
+    """Zgodnie z YAML: utwórz brakujące wpisy, zaktualizuj zmienione i usuń nadmiarowe.
+
+    YAML jest jedynym źródłem konfiguracji, a wpisy w interfejsie to tylko jego odbicie.
+    """
+    lock = hass.data.setdefault(f"{DOMAIN}_sync_lock", asyncio.Lock())
+    async with lock:
+        entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
+        by_uid = {e.unique_id: e for e in entries.values() if e.unique_id}
+        wanted: set[str] = set()
+        for conf in blocks:
+            uid = f"yaml:{conf[CONF_ID]}"
+            wanted.add(uid)
+            digest = yaml_digest(conf)
+            entry = by_uid.get(uid)
+            if entry is not None and entry.version < 3:  # wpis w starym formacie: utwórz od nowa
+                await hass.config_entries.async_remove(entry.entry_id)
+                entry = None
+            if entry is None:
+                hass.async_create_task(
+                    hass.config_entries.flow.async_init(
+                        DOMAIN, context={"source": SOURCE_IMPORT}, data=conf
+                    )
+                )
+            elif entry.data.get(CONF_YAML_HASH) != digest:
+                _LOGGER.info("HA_mailer: konfiguracja YAML '%s' zmieniona, przeładowuję", conf[CONF_ID])
+                hass.config_entries.async_update_entry(entry, data={**conf, CONF_YAML_HASH: digest})
+        for entry in list(entries.values()):
+            if entry.unique_id in wanted:
+                continue
+            if (entry.unique_id or "").startswith("yaml:"):
+                _LOGGER.info("HA_mailer: blok YAML '%s' usunięty, usuwam wpis", entry.unique_id[5:])
+            else:
+                _notify_legacy_removed(hass, entry)
+            await hass.config_entries.async_remove(entry.entry_id)
+
+
+def _notify_legacy_removed(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Konfiguracja z interfejsu nie jest już obsługiwana - pokaż jej odpowiednik w YAML."""
+    snippet = _legacy_entry_yaml(entry)
+    message = (
+        f"Konfiguracja HA_mailer przez interfejs została wyłączona, a wpis „{entry.title}” usunięty. "
+        "Od teraz ustawienia znajdują się wyłącznie w `configuration.yaml`. "
+        "Statystyki i kolejka wysyłki tego wpisu zostały wyzerowane, a pliki w folderze raportów nie zostały ruszone."
+    )
+    if snippet:
+        message += (
+            "\n\nOdpowiednik dotychczasowej konfiguracji (hasło aplikacji zapisz w `secrets.yaml` "
+            "pod kluczem `ha_mailer_gmail_password`):\n\n```yaml\n" + snippet + "```"
+        )
+    persistent_notification.async_create(
+        hass, message, title="HA_mailer - konfiguracja przeniesiona do YAML",
+        notification_id=f"{DOMAIN}_legacy_{entry.entry_id}",
+    )
+    _LOGGER.warning("HA_mailer: usunięto wpis %s utworzony w interfejsie (obsługiwany jest tylko YAML)", entry.title)
+
+
 # ------------------------------------------------------------- cykl życia ---
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Import konfiguracji z configuration.yaml do wpisów w UI."""
-    for idx, conf in enumerate(config.get(DOMAIN, [])):
-        conf = dict(conf)
-        conf.setdefault(CONF_ID, str(idx))
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN, context={"source": SOURCE_IMPORT}, data=conf
-            )
-        )
-    return True
+    """Wczytaj konfigurację z configuration.yaml i zsynchronizuj wpisy."""
+    hass.async_create_task(_sync_yaml(hass, _blocks(config.get(DOMAIN))))
 
+    async def _reload_yaml(call: ServiceCall) -> None:
+        try:
+            conf = await async_integration_yaml_config(hass, DOMAIN)
+        except Exception as err:  # noqa: BLE001
+            raise HomeAssistantError(f"Nie można wczytać YAML: {err}") from err
+        if conf is None:
+            raise HomeAssistantError("Konfiguracja YAML ha_mailer jest niepoprawna - szczegóły w logach.")
+        await _sync_yaml(hass, _blocks(conf.get(DOMAIN)))
 
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """v1 (lista encji) i v2 (jeden raport) -> v3 (wiele raportów, wspólne ustawienia)."""
-    if entry.version >= 3:
-        return True
-
-    def to_rows(src) -> dict:
-        d = dict(src)
-        if CONF_ENTITIES in d:
-            d[CONF_ROWS] = [{ROW_ENTITY: e} for e in d.pop(CONF_ENTITIES)]
-        return d
-
-    data, options = to_rows(entry.data), to_rows(entry.options)
-    if entry.version == 1:
-        data.setdefault(CONF_COLUMNS, list(LEGACY_COLUMNS))
-
-    def build(src: dict) -> dict:
-        report = {
-            CONF_ID: "raport",
-            CONF_NAME: "Raport",
-            CONF_CRON: src[CONF_CRON],
-            CONF_RECIPIENT: src[CONF_RECIPIENT],
-            CONF_SUBJECT: src.get(CONF_SUBJECT, DEFAULT_SUBJECT),
-            CONF_COLUMNS: list(src.get(CONF_COLUMNS, LEGACY_COLUMNS)),
-            CONF_ROWS: list(src[CONF_ROWS]),
-        }
-        return {
-            CONF_GMAIL_USER: src[CONF_GMAIL_USER],
-            CONF_GMAIL_PASSWORD: src[CONF_GMAIL_PASSWORD],
-            CONF_RETRY: DEFAULT_RETRY,
-            CONF_RETENTION: DEFAULT_RETENTION,
-            CONF_REPORTS: [report],
-        }
-
-    new = build({**data, **options})
-    if CONF_YAML_HASH in data:
-        # wpis z YAML: zachowaj ID i skrót tak, aby niezmieniony YAML nie nadpisał wpisu
-        new[CONF_ID] = data.get(CONF_ID, "0")
-        new[CONF_YAML_HASH] = yaml_digest({**build(data), CONF_ID: new[CONF_ID]})
-
-    store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
-    old = await store.async_load()
-    if old and "stats" not in old:  # stare statystyki -> statystyki raportu "raport"
-        await store.async_save({"stats": {"raport": old}, "pending": []})
-
-    @callback
-    def _migrate_unique_id(ent):
-        suffix = ent.unique_id.removeprefix(f"{entry.entry_id}_")
-        if suffix in ("status", "last_sent", "stats"):
-            return {"new_unique_id": f"{entry.entry_id}_raport_{suffix}"}
-        return None
-
-    await er.async_migrate_entries(hass, entry.entry_id, _migrate_unique_id)
-    hass.config_entries.async_update_entry(entry, data=new, options={}, version=3)
+    async_register_admin_service(hass, DOMAIN, "reload", _reload_yaml)
     return True
 
 
@@ -1264,6 +1492,8 @@ def _prune_registry(hass: HomeAssistant, entry: ConfigEntry, mailer: HAMailer) -
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if not (entry.unique_id or "").startswith("yaml:"):
+        return False  # wpis z interfejsu: zostanie usunięty przez synchronizację z YAML
     mailer = HAMailer(hass, entry)
     await mailer.async_load()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = mailer
@@ -1278,10 +1508,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 def _targets(hass: HomeAssistant, call: ServiceCall) -> list[tuple[HAMailer, list[str]]]:
     mailers: dict[str, HAMailer] = hass.data.get(DOMAIN, {})
-    entry_id = call.data.get("entry_id")
-    if entry_id and entry_id not in mailers:
-        raise ServiceValidationError(f"Nieznany entry_id: {entry_id}")
-    selected = [mailers[entry_id]] if entry_id else list(mailers.values())
+    config_id = call.data.get("config")
+    selected = [
+        m for m in mailers.values() if not config_id or m.entry.data.get(CONF_ID) == str(config_id)
+    ]
+    if config_id and not selected:
+        raise ServiceValidationError(f"Nie znaleziono konfiguracji o id: {config_id}")
     text = call.data.get("report")
     result: list[tuple[HAMailer, list[str]]] = []
     for mailer in selected:
@@ -1299,7 +1531,7 @@ def _targets(hass: HomeAssistant, call: ServiceCall) -> list[tuple[HAMailer, lis
 def _register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, "send_now"):
         return
-    schema = vol.Schema({vol.Optional("entry_id"): str, vol.Optional("report"): str})
+    schema = vol.Schema({vol.Optional("config"): cv.string, vol.Optional("report"): cv.string})
 
     async def _send_now(call: ServiceCall) -> None:
         errors: list[str] = []
@@ -1343,5 +1575,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     for rid in saved.get("stats", {}):
         persistent_notification.async_dismiss(hass, f"{DOMAIN}_{entry.entry_id}_{rid}")
         ir.async_delete_issue(hass, DOMAIN, f"send_failed_{entry.entry_id}_{rid}")
+        ir.async_delete_issue(hass, DOMAIN, f"template_problem_{entry.entry_id}_{rid}")
     ir.async_delete_issue(hass, DOMAIN, f"storage_unavailable_{entry.entry_id}")
     await store.async_remove()
